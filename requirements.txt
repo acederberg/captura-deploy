@@ -1,0 +1,6 @@
+pulumi>=3
+pulumi_linode>=4.8.1
+pulumi_kubernetes>=4.4.0
+pulumi_kubernetes>=4.4.0
+pulumi_kubernetes_cert_manager>=0.0.5
+pulumi_kubernetes_cert_manager>=0.0.5

@@ -1,0 +1,10 @@
+name: CapturaPulumi
+runtime:
+  name: python
+  options:
+    virtualenv: venv
+description: Tool for deploying captura on linode.
+config:
+  pulumi:tags:
+    value:
+      pulumi:template: https://www.pulumi.com/ai/api/project/43b7f897-5f16-44b6-9fb2-d58982f5dc43.zip
