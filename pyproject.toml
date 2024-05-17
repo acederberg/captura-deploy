@@ -1,0 +1,78 @@
+[project]
+authors = [{name = "Adrian Cederberg", email = "adrn.cederberg123@gmail.com"}, ]
+name = "captura-deploy"
+version = "0.0.0"
+description = "Deploy a ``captura`` app to linode."
+keywords = ["api", "rst", "markdown"]
+# readme = "README.rst"
+#liscense = "Lisense :: OSI Approved :: MIT License"
+
+# The following were take directly from pyproject.toml in pydantic because I am lazy and the classifiers
+# are applicable here.
+classifiers = [
+    'Programming Language :: Python',
+    'Programming Language :: Python :: 3',
+    'Programming Language :: Python :: 3 :: Only',
+    'Programming Language :: Python :: 3.7',
+    'Programming Language :: Python :: 3.8',
+    'Programming Language :: Python :: 3.9',
+    'Programming Language :: Python :: 3.10',
+    'Programming Language :: Python :: 3.11',
+    'Intended Audience :: Developers',
+    'Topic :: Internet',
+]
+
+requires-python = ">=3.7" # because https://github.com/pydantic/pydantic/blob/main/pyproject.toml
+dependencies = [
+  "pulumi>=3",
+  "pulumi_linode>=4.8.1",
+  "pulumi_kubernetes>=4.4.0",
+]
+
+
+[project.optional_dependencies]
+dev = ["linode-cli"]
+
+
+[tool.black]
+
+
+# NOTE: See the documentation for the various configuration fields here:
+#
+#       .. code:: txt
+#
+#           https://pycqa.github.io/isort/docs/configuration/options.html
+#
+# NOTE: Does not support multiline headings. Is not indempotent.
+[tool.isort]
+profile = "black"
+import_heading_stdlib = "=========================================================================== #"
+import_heading_firstparty = "--------------------------------------------------------------------------- #" 
+skip = [".venv-local", ".venv"]
+src_paths = ["src", "tests"]
+
+
+[tool.flake8]
+# Read the [enumeration of available properties](https://flake8.pycqa.org/en/latest/user/options.html#cmdoption-flake8-color).
+indent_size = 4
+max_line_length = 120
+hang_closing = true
+color = "always"
+filename = "**/*.py"
+ignore = [
+	"E133", # Stupid closing backet requires indentation
+]
+
+
+[tool.autoflake]
+in_place = true
+remove_all_unused_imports = true
+recursive = true
+
+
+[tool.mypy]
+ignore_missing_imports = true
+plugins = ["pydantic.mypy"]
+
+
+

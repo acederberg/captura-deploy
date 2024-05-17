@@ -1,8 +1,15 @@
+# NOTE: To learn about this configuration file see
+#
+#       .. code:: 
+#          
+#          https://www.pulumi.com/docs/concepts/projects/project-file/
+#
 name: CapturaPulumi
+main: captura_pulumi/__main__.py
 runtime:
   name: python
   options:
-    virtualenv: venv
+    virtualenv: .venv
 description: Tool for deploying captura on linode.
 config:
   pulumi:tags:
