@@ -1,0 +1,83 @@
+# NOTE: DO NOT PUT SECRET VALUES IN THIS FILE! THIS FILE WILL BE MERGED CAN BE
+#       OVERWRITTEN IN ``k8s.py``.
+additionalArguments:
+  - --entrypoints.websecure.http.tls.certresolver=porkbun
+  - --entrypoints.websecure.http.tls.domains[0].main=acederberg.io
+  - --entrypoints.websecure.http.tls.domains[0].sans=*.acederberg.io
+
+ingressRoute:
+  dashboard: 
+    enabled: True # default
+    matchRule: Host(`traefik.acederberg.io`)
+    entryPoints: ["websecure"]
+    middlewares:
+      - name: traefik-dashboard-auth
+
+# NOTE: This is done inside of ``k8s.py``.
+# extraObjects:
+#   - apiVersion: v1
+#     kind: Secret
+#     metadata: 
+#       name: traefik-dashboard-auth
+#       namespace: traefik
+#     type: kubernetes.io/basic-auth
+#     stringData:
+#       username: acederberg
+#       password: $99d99d99dTortelliniWeenie000000000
+#
+#   - apiVersion: traefik.io/v1alpha1
+#     kind: Middleware
+#     metadata:
+#       name: traefik-dashboard-auth
+#       namespace: traefik
+#     spec:
+#       basicAuth:
+#         secret: traefik-dashboard-auth
+
+
+ports: 
+  traefik:
+    port: 9000 # default
+    exposedPort: 9000 # default
+  web:
+    redirectTo: 
+      port: websecure
+    # port: 8000 # default
+    # exposedPort: 80 # default
+    # protocol: TCP
+  websecure:
+    port: 8443 # default
+    exposedPort: 443 # default
+tls:
+  enabled: true
+
+# NOTE: See https://github.com/traefik/traefik-helm-chart/blob/master/EXAMPLES.md
+certResolvers:
+  letsencrypt: 
+    email: adrn.cederberg123@gmail.com
+    dnsChallenge:
+      provider: porkbun
+    storage: /data/acme.json
+
+
+env:
+  - name: PORKBUN_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: porkbun
+        key: api_key
+  - name: PORKBUN_SECRET_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: porkbun
+        key: secret_key
+
+
+deployment:
+  initContainers:
+    - name: volume-permissions
+      image: busybox:latest
+      command: ["sh", "-c", "touch /data/acme.json; chmod -v 600 /data/acme.json"]
+      volumeMounts:
+      - mountPath: /data
+        name: data

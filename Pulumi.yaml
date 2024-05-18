@@ -5,7 +5,7 @@
 #          https://www.pulumi.com/docs/concepts/projects/project-file/
 #
 name: CapturaPulumi
-main: captura_pulumi/__main__.py
+main: captura_pulumi/main.py
 runtime:
   name: python
   options:

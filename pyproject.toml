@@ -3,7 +3,7 @@ authors = [{name = "Adrian Cederberg", email = "adrn.cederberg123@gmail.com"}, ]
 name = "captura-deploy"
 version = "0.0.0"
 description = "Deploy a ``captura`` app to linode."
-keywords = ["api", "rst", "markdown"]
+keywords = ["captura", "linode", "kubernetes", "k8s", "traefik", "deploy", "pulumi"]
 # readme = "README.rst"
 #liscense = "Lisense :: OSI Approved :: MIT License"
 
@@ -27,10 +27,12 @@ dependencies = [
   "pulumi>=3",
   "pulumi_linode>=4.8.1",
   "pulumi_kubernetes>=4.4.0",
+  "pydantic",
+  "pyyaml"
 ]
 
 
-[project.optional_dependencies]
+[project.optional-dependencies]
 dev = ["linode-cli"]
 
 
