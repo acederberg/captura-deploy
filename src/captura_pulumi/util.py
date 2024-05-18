@@ -6,7 +6,8 @@ from typing import Any, Dict
 import yaml
 from pydantic.v1.utils import deep_update
 
-PATH_BASE: str = p.join(p.dirname(__file__), "..")
+PATH_BASE: str = p.realpath(p.join(p.dirname(__file__), "..", ".."))
+PATH_ASSETS: str = p.realpath(p.join("assets"))
 
 
 class path:
@@ -16,7 +17,7 @@ class path:
 
     @staticmethod
     def asset(*files: str) -> str:
-        return p.join(PATH_BASE, *files)
+        return p.join(PATH_ASSETS, *files)
 
 
 def load(*paths: str, overwrite: Dict[str, Any] | None = None):

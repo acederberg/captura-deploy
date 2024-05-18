@@ -13,27 +13,6 @@ ingressRoute:
     middlewares:
       - name: traefik-dashboard-auth
 
-# NOTE: This is done inside of ``k8s.py``.
-# extraObjects:
-#   - apiVersion: v1
-#     kind: Secret
-#     metadata: 
-#       name: traefik-dashboard-auth
-#       namespace: traefik
-#     type: kubernetes.io/basic-auth
-#     stringData:
-#       username: acederberg
-#       password: $99d99d99dTortelliniWeenie000000000
-#
-#   - apiVersion: traefik.io/v1alpha1
-#     kind: Middleware
-#     metadata:
-#       name: traefik-dashboard-auth
-#       namespace: traefik
-#     spec:
-#       basicAuth:
-#         secret: traefik-dashboard-auth
-
 
 ports: 
   traefik:
@@ -42,9 +21,6 @@ ports:
   web:
     redirectTo: 
       port: websecure
-    # port: 8000 # default
-    # exposedPort: 80 # default
-    # protocol: TCP
   websecure:
     port: 8443 # default
     exposedPort: 443 # default
@@ -60,18 +36,18 @@ certResolvers:
     storage: /data/acme.json
 
 
-env:
-  - name: PORKBUN_API_KEY
-    valueFrom:
-      secretKeyRef:
-        name: porkbun
-        key: api_key
-  - name: PORKBUN_SECRET_API_KEY
-    valueFrom:
-      secretKeyRef:
-        name: porkbun
-        key: secret_key
-
+# env:
+#   - name: PORKBUN_API_KEY
+#     valueFrom:
+#       secretKeyRef:
+#         name: porkbun
+#         key: porkbun_api_key
+#   - name: PORKBUN_SECRET_API_KEY
+#     valueFrom:
+#       secretKeyRef:
+#         name: porkbun
+#         key: porkbun_secret_key
+#
 
 deployment:
   initContainers:
