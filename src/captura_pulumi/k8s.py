@@ -10,7 +10,7 @@ from typing import Any, Dict
 
 import pulumi_kubernetes as k8s
 import pulumi_linode as linode
-from pulumi import Config
+from pulumi import Config, Output
 from pulumi_kubernetes.helm.v3.helm import FetchOpts
 
 # --------------------------------------------------------------------------- #
@@ -24,13 +24,11 @@ def create_traefik_values(config: Config) -> Dict[str, Any]:
     traefik_values = util.load(traefik_values_path)
 
     # NOTE: These requirements are derivative of result of the example in [1]
-    if (traefik_values.get(f) for f in {"extraObjects", "env"}) is not None:
+    if any(traefik_values.get(f) is not None for f in {"extraObjects", "env"}):
         raise ValueError("Helm values must not specify `extraObjects`.")
 
-    traefik_dash_un = config.get("captura:traefik_dashboard_username")
-    traefik_dash_pw = config.get_secret("captura:traefik_dashboard_password")
-    porkbun_api_key = config.get_secret("captura:porkbun_api_key")
-    porkbun_secret_key = config.get_secret("captura:porkbun_secret_key")
+    traefik_dash_un = config.require("traefik_dashboard_username")
+    traefik_dash_pw = config.require_secret("traefik_dashboard_password")
 
     traefik_values.update(
         env=[
@@ -40,7 +38,7 @@ def create_traefik_values(config: Config) -> Dict[str, Any]:
                 "name": "PORKBUN_API_KEY",
                 "valueFrom": {
                     "secretKeyRef": {
-                        "name": "porkbun",
+                        "name": "traefik-porkbun",
                         "key": "porkbun_api_key",
                     }
                 },
@@ -49,7 +47,7 @@ def create_traefik_values(config: Config) -> Dict[str, Any]:
                 "name": "PORKBUN_SECRET_API_KEY",
                 "valueFrom": {
                     "secretKeyRef": {
-                        "name": "porkbun",
+                        "name": "traefik-porkbun",
                         "key": "porkbun_secret_key",
                     }
                 },
@@ -57,19 +55,6 @@ def create_traefik_values(config: Config) -> Dict[str, Any]:
         ],
         extra_objects={
             "extraObjects": [
-                {
-                    "apiVersion": "v1",
-                    "kind": "Secret",
-                    "metadata": {
-                        "name": "traefik-dashboard-auth",
-                        "namespace": "traefik",
-                    },
-                    "type": "Opaque",
-                    "stringData": {
-                        "api_key": porkbun_api_key,
-                        "secret_key": porkbun_secret_key,
-                    },
-                },
                 {
                     "apiVersion": "v1",
                     "kind": "Secret",
@@ -106,10 +91,27 @@ def create_traefik(config: Config, *, id_cluster: str) -> k8s.helm.v3.Release:
     #       hooks might be necessary, and further since releases use the built
     #       in functionality of helm to create the release - I would rather use
     #       the release resource. For more on the difference, see [2].
-    traefik_namespace = k8s.core.v1.Namespace("traefik")
+    _ = k8s.core.v1.Namespace("traefik", metadata=dict(name="traefik"))
+    porkbun_api_key = config.require_secret("porkbun_api_key")
+    porkbun_secret_key = config.require_secret("porkbun_secret_key")
+
+    _ = k8s.core.v1.Secret(
+        "treafik-porkbun",
+        metadata={
+            "name": "traefik-porkbun",
+            "namespace": "traefik",
+        },
+        string_data={
+            "porkbun_api_key": porkbun_api_key,
+            "porkbun_secret_key": porkbun_secret_key,
+        },
+    )
+    _.string_data.apply(print)
+
     traefik_release = k8s.helm.v3.Release(
-        "captura-traefik-chart",
+        "captura-traefik",
         k8s.helm.v3.ReleaseArgs(
+            name="traefik",
             chart="traefik",
             repository_opts=k8s.helm.v3.RepositoryOptsArgs(
                 repo="https://traefik.github.io/charts",
