@@ -15,6 +15,7 @@ from pulumi_kubernetes.helm.v3.helm import FetchOpts
 
 # --------------------------------------------------------------------------- #
 from captura_pulumi import util
+from captura_pulumi.porkbun import PorkbunRequests
 
 
 def create_traefik_values(config: Config) -> Dict[str, Any]:
@@ -92,8 +93,7 @@ def create_traefik(config: Config, *, id_cluster: str) -> k8s.helm.v3.Release:
     #       in functionality of helm to create the release - I would rather use
     #       the release resource. For more on the difference, see [2].
     _ = k8s.core.v1.Namespace("traefik", metadata=dict(name="traefik"))
-    porkbun_api_key = config.require_secret("porkbun_api_key")
-    porkbun_secret_key = config.require_secret("porkbun_secret_key")
+    porkbun = PorkbunRequests.from_config(config)
 
     _ = k8s.core.v1.Secret(
         "treafik-porkbun",
@@ -102,11 +102,10 @@ def create_traefik(config: Config, *, id_cluster: str) -> k8s.helm.v3.Release:
             "namespace": "traefik",
         },
         string_data={
-            "porkbun_api_key": porkbun_api_key,
-            "porkbun_secret_key": porkbun_secret_key,
+            "porkbun_api_key": porkbun.api_key,
+            "porkbun_secret_key": porkbun.secret_key,
         },
     )
-    _.string_data.apply(print)
 
     traefik_release = k8s.helm.v3.Release(
         "captura-traefik",

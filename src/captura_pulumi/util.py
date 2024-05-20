@@ -7,17 +7,22 @@ import yaml
 from pydantic.v1.utils import deep_update
 
 PATH_BASE: str = p.realpath(p.join(p.dirname(__file__), "..", ".."))
+PATH_CONFIGS: str = p.realpath(p.join("configs"))
 PATH_ASSETS: str = p.realpath(p.join("assets"))
 
 
 class path:
     @staticmethod
-    def base(*files: str) -> str:
-        return p.join(PATH_BASE, *files)
+    def base(*segments: str) -> str:
+        return p.join(PATH_BASE, *segments)
 
     @staticmethod
-    def asset(*files: str) -> str:
-        return p.join(PATH_ASSETS, *files)
+    def asset(*segments: str) -> str:
+        return p.join(PATH_ASSETS, *segments)
+
+    @staticmethod
+    def config(*segments: str) -> str:
+        return p.join(PATH_CONFIGS, *segments)
 
 
 def load(*paths: str, overwrite: Dict[str, Any] | None = None):
