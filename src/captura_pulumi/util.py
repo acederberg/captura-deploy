@@ -1,4 +1,7 @@
 # =========================================================================== #
+
+# =========================================================================== #
+import os
 from collections.abc import Sequence
 from os import path as p
 from typing import Any, Dict
@@ -9,6 +12,21 @@ from pydantic.v1.utils import deep_update
 PATH_BASE: str = p.realpath(p.join(p.dirname(__file__), "..", ".."))
 PATH_CONFIGS: str = p.realpath(p.join("configs"))
 PATH_ASSETS: str = p.realpath(p.join("assets"))
+PATH_LOGS: str = p.realpath(p.join("logs"))
+
+
+def ensure(dirpath: str):
+    if p.isfile(dirpath):
+        raise ValueError(f"`{dirpath}` should not be a file.")
+
+    if p.isdir(dirpath) or p.exists(dirpath):
+        return
+
+    os.mkdir(dirpath)
+
+
+ensure(PATH_LOGS)
+ensure(PATH_CONFIGS)
 
 
 class path:

@@ -5,7 +5,7 @@ import pulumi
 
 # --------------------------------------------------------------------------- #
 # NOTE: DO NOT ADD MAIN! PULUMI SUPPORT FOR PYTHON MODULES IS TRASH! SEE https://github.com/pulumi/pulumi/issues/7360
-from captura_pulumi import k8s, linode
+from captura_pulumi import k8s, linode, porkbun
 
 __version__ = "0.0.0"
 
@@ -18,6 +18,6 @@ def create_captura():
     _ = linode.create_bucket(config)
 
     # Create traefik.
-    cluster.id.apply(
+    traefik = cluster.id.apply(
         lambda id_cluster: k8s.create_traefik(config, id_cluster=id_cluster)
     )

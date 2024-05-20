@@ -7,12 +7,15 @@ import asyncio
 import functools
 import json
 import re
+from datetime import datetime
 from typing import (
     Annotated,
     Any,
+    AsyncGenerator,
     Callable,
     ClassVar,
     Dict,
+    Generator,
     Literal,
     ParamSpec,
     Self,
@@ -31,6 +34,8 @@ from captura_pulumi import util
 
 P_Porkbun = ParamSpec("P_Porkbun")
 RecordType = Literal["A", "DNS", "CNAME"]
+
+CONSOLE = Console()
 
 
 # NOTE: API reference: https://porkbun.com/api/json/v3/documentation
@@ -188,7 +193,8 @@ class PorkbunRequests(BaseYamlSettings):
         *,
         subdomain: str,
         # force: bool = False,
-    ):
+    ) -> AsyncGenerator[str, None]:
+
         p = re.compile(
             f"(?P<subdomain_all>(?P<subdomain_name>[*a-zA-Z0-9_-]*)\\.?){domain}"
         )
@@ -210,19 +216,19 @@ class PorkbunRequests(BaseYamlSettings):
         assert (records := data.get("records")) is not None
         match records:
             case (record,):
-                console.print("[green]Found record " + msg_chain)
+                yield "Found record " + msg_chain
                 if record["content"] == ipaddr:
                     return
 
                 req_delete = self.req_delete_domain_record(domain, record["id"])
                 await client.send(req_delete)
             case ():
-                console.print("[green]No record found for " + msg_chain)
+                yield "No record found for " + msg_chain
             case bad:
                 raise ValueError(f"Refusing to handle `{bad}`.")
 
         # NOTE: Read and verify nothing
-        console.print("[green]Verifying that records cleared for " + msg_chain)
+        yield "Verifying that records cleared for " + msg_chain
         res_read = await client.send(req_read)
         data, err = self.check(res_read)
         if err is not None:
@@ -232,7 +238,7 @@ class PorkbunRequests(BaseYamlSettings):
         assert isinstance(records, list) and len(records) == 0
 
         # NOTE: Create.
-        console.print("[green]Creating records for " + msg_chain)
+        yield "Creating records for " + msg_chain
 
         req_create = self.req_create_domain_record(
             domain, name=subdomain_name, record_type="A", content=ipaddr
@@ -242,8 +248,7 @@ class PorkbunRequests(BaseYamlSettings):
         if err is not None:
             raise err
 
-        console.print("[green]Record created!")
-        console.print_json(json.dumps(data))
+        yield "Record created!"
 
     async def __call__(
         self,
@@ -261,33 +266,28 @@ class PorkbunRequests(BaseYamlSettings):
             raise err
 
         for subdomain in subdomains:
-            await self.replace(client, domain, ipaddr=ipaddr, subdomain=subdomain)
+            async for line in self.replace(
+                client, domain, ipaddr=ipaddr, subdomain=subdomain
+            ):
+                yield line
 
-
-console = Console()
 
 # ---------------------------------------------------------------------------
 
 
-async def main():
+async def handle_porkbun(*, domain: str, ipaddr: str):
+    """Use apply to point the domain name at the new node balancer."""
 
     porkbun = PorkbunRequests()  # type: ignore
+    subdomains = {domain, f"*.{domain}", f"www.{domain}"}
+
+    util.ensure(util.PATH_LOGS)
     async with httpx.AsyncClient() as client:
-        await porkbun(
-            client,
-            "acederberg.io",
-            "45.79.231.53",
-            subdomains={"acederberg.io", "*.acederberg.io", "www.acederberg.io"},
-        )
-
-        # await porkbun.dispatch(
-        #     client,
-        #     porkbun.req_read_domain,
-        #     "acederberg.io",
-        #     record_type="A",
-        #     subdomain="",
-        # )
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        with open(util.path.base("porkbun.log"), "a") as file:
+            file.write(80 * "=")
+            file.write("Logs for `handle_porkbun`")
+            file.write("")
+            file.write(str(datetime.now()))
+            async for line in porkbun(client, domain, ipaddr, subdomains=subdomains):
+                file.write(line)
+            file.write("")
