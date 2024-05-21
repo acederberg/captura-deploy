@@ -8,6 +8,7 @@
 # =========================================================================== #
 from typing import Any, Dict
 
+import pulumi
 import pulumi_kubernetes as k8s
 import pulumi_linode as linode
 from pulumi import Config, Output
@@ -95,7 +96,7 @@ def create_traefik_values(config: Config) -> Dict[str, Any]:
 
 def create_traefik(config: Config, *, id_cluster: str) -> k8s.helm.v3.Release:
 
-    k8s_provider = k8s.Provider("k8s-provider", cluster=id_cluster)
+    k8s.Provider("k8s-provider", cluster=id_cluster)
 
     # NOTE: Since visibility of traefik does not really matter here and since
     #       hooks might be necessary, and further since releases use the built
@@ -129,10 +130,7 @@ def create_traefik(config: Config, *, id_cluster: str) -> k8s.helm.v3.Release:
         ),
     )
     traefik_release.namespace.apply(
-        lambda namespace: handle_porkbun_traefik(
-            config,
-            namespace=namespace,
-        )
+        lambda ns: handle_porkbun_traefik(config, namespace=ns)
     )
     return traefik_release
 
@@ -141,14 +139,159 @@ def handle_porkbun_traefik(
     config: Config,
     *,
     namespace: str | None,
-):
+) -> None:
 
     assert namespace is not None, "Namespace should not be `None`."
     traefik = k8s.core.v1.Service.get(
         "captura-traefik", Output.concat(f"{namespace}/traefik")
     )
     Output.all(
-        config.get("domain"),
-        # status of the service. Populated by the system. Read-only. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+        domain := config.require("domain"),
         traefik.status.load_balancer.ingress[0].ip,
     ).apply(lambda data: porkbun.handle_porkbun(domain=data[0], ipaddr=data[1]))
+
+    k8s.apiextensions.CustomResource(
+        "traefik-dashboard",
+        api_version="traefik.io/v1alpha1",
+        kind="IngressRoute",
+        metadata={
+            "namespace": namespace,
+            "name": "traefik-dashboard",
+        },
+        spec={
+            "entryPoints": ["websecure"],
+            "routes": [
+                {
+                    "kind": "Rule",
+                    "match": f"HOST(`traefik.{domain}`)",
+                    "middlewares": [
+                        {
+                            "name": "traefik-dashboard-auth",
+                            "namespace": namespace,
+                        }
+                    ],
+                    "services": [
+                        {
+                            "name": "api@internal",
+                            "kind": "TraefikService",
+                        }
+                    ],
+                    "kind": "Rule",
+                },
+            ],
+            "tls": {"certResolver": "letsencrypt"},
+        },
+    )
+
+
+def create_error_pages(config: pulumi.Config, *, namespace: str):
+    labels = {
+        "acederberg.io/tier": "base",
+        "acederberg.io/from": "pulumi",
+        "acederberg.io/component": "error-pages",
+    }
+
+    selector = k8s.meta.v1.LabelSelectorArgs(match_labels=labels)
+    metadata = k8s.meta.v1.ObjectMetaArgs(
+        name="error-pages", namespace="traefik", labels=labels
+    )
+    show_details = config.get_bool("error_pages_show_details", True)
+
+    port = 8080
+    container_args = k8s.core.v1.ContainerArgs(
+        name="error-pages",
+        image="ghcr.io/tarampampam/error-pages",
+        readiness_probe=k8s.core.v1.ProbeArgs(
+            http_get=k8s.core.v1.HTTPGetActionArgs(
+                path="/500.html",
+                port=port,
+            )
+        ),
+        ports=[k8s.core.v1.ContainerPortArgs(container_port=port)],
+        env=[  # type: ignore
+            dict(name="SHOW_DETAILS", value=str(1 if show_details else 0)),
+            dict(
+                name="TEMPLATE_NAME",
+                value=config.get(
+                    "error_pages_template_name",
+                    "https://tarampampam.github.io/error-pages/",
+                ),
+            ),
+        ],
+    )
+
+    deployment = k8s.apps.v1.Deployment(
+        "error-pages-deployment",
+        metadata=metadata,
+        spec=k8s.apps.v1.DeploymentSpecArgs(
+            replicas=1,
+            selector=selector,
+            template=k8s.core.v1.PodTemplateSpecArgs(
+                metadata=metadata,
+                spec=k8s.core.v1.PodSpecArgs(
+                    containers=[container_args],
+                ),
+            ),
+        ),
+    )
+
+    service = k8s.core.v1.Service(
+        "error-pages-service",
+        metadata=metadata,
+        spec=k8s.core.v1.ServiceSpecArgs(
+            type="ClusterIP",
+            selector=labels,
+            ports=[
+                k8s.core.v1.ServicePortArgs(
+                    name="error-pages-http",
+                    port=port,
+                    target_port=port,
+                )
+            ],
+        ),
+    )
+
+    middleware = k8s.apiextensions.CustomResource(
+        "error-pages-middleware",
+        api_version="traefik.io/v1alpha1",
+        kind="Middleware",
+        metadata=metadata,
+        spec={
+            "errors": {
+                "status": ["400-499", "500-599"],
+                "query": "/{status}.html",
+                "service": {
+                    "namespace": namespace,
+                    "name": service.metadata.name,
+                    "port": port,
+                },
+            }
+        },
+    )
+
+    ingress_route = k8s.apiextensions.CustomResource(
+        "error-pages-ingressroute",
+        api_version="traefik.io/v1alpha1",
+        kind="IngressRoute",
+        metadata=metadata,
+        spec={
+            "entryPoints": ["websecure"],
+            "routes": [
+                {
+                    "kind": "Rule",
+                    "match": "HOST(`errors.acederberg.io`)",
+                    "middlewares": [{"name": "error-pages", "namespace": "traefik"}],
+                    "services": [
+                        {
+                            "kind": "Service",
+                            "name": "error-pages",
+                            "namespace": "traefik",
+                            "port": 8080,
+                        }
+                    ],
+                }
+            ],
+            "tls": {"certResolver": "letsencrypt"},
+        },
+    )
+    return service

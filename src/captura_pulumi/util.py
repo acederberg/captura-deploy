@@ -35,6 +35,10 @@ class path:
         return p.join(PATH_BASE, *segments)
 
     @staticmethod
+    def logs(*segments: str) -> str:
+        return p.join(PATH_LOGS, *segments)
+
+    @staticmethod
     def asset(*segments: str) -> str:
         return p.join(PATH_ASSETS, *segments)
 

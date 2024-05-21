@@ -21,3 +21,6 @@ def create_captura():
     traefik = cluster.id.apply(
         lambda id_cluster: k8s.create_traefik(config, id_cluster=id_cluster)
     )
+    error_pages = traefik.namespace.apply(
+        lambda ns: k8s.create_error_pages(config, namespace=ns)
+    )

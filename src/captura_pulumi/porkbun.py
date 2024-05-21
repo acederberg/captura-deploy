@@ -280,14 +280,15 @@ async def handle_porkbun(*, domain: str, ipaddr: str):
 
     porkbun = PorkbunRequests()  # type: ignore
     subdomains = {domain, f"*.{domain}", f"www.{domain}"}
+    now = datetime.now()
 
     util.ensure(util.PATH_LOGS)
+
     async with httpx.AsyncClient() as client:
-        with open(util.path.base("porkbun.log"), "a") as file:
+        with open(util.path.logs(f"porkbun-{now.timestamp()}.log"), "a") as file:
             file.write(80 * "=")
-            file.write("Logs for `handle_porkbun`")
-            file.write("")
-            file.write(str(datetime.now()))
+            file.write("\nLogs for `handle_porkbun`\n\n")
+            file.write("Timestamp: " + str(now))
             async for line in porkbun(client, domain, ipaddr, subdomains=subdomains):
-                file.write(line)
-            file.write("")
+                file.write(line + "\n")
+            file.write("\n")
