@@ -1,11 +1,11 @@
 # NOTE: DO NOT PUT SECRET VALUES IN THIS FILE! THIS FILE WILL BE MERGED CAN BE
 #       OVERWRITTEN IN ``k8s.py``.
-# additionalArguments:
+additionalArguments:
   # - --providers.kubernetescrd
   # - --certificatesresolvers.porkbun.acme.tlschallenge
   # - --entrypoints.websecure.http.tls.certresolver=porkbun
-  # - --entrypoints.websecure.http.tls.domains[0].main=acederberg.io
-  # - --entrypoints.websecure.http.tls.domains[0].sans=*.acederberg.io
+  - --entrypoints.websecure.http.tls.domains[0].main=acederberg.io
+  - --entrypoints.websecure.http.tls.domains[0].sans=*.acederberg.io
 
 # ingressRoute:
 #   dashboard: 

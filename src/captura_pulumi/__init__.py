@@ -24,3 +24,6 @@ def create_captura():
     error_pages = traefik.namespace.apply(
         lambda ns: k8s.create_error_pages(config, namespace=ns)
     )
+    traefik.namespace.apply(
+        lambda ns: k8s.create_traefik_ingressroutes(config, namespace=ns)
+    )

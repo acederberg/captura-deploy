@@ -279,13 +279,19 @@ async def handle_porkbun(*, domain: str, ipaddr: str):
     """Use apply to point the domain name at the new node balancer."""
 
     porkbun = PorkbunRequests()  # type: ignore
-    subdomains = {domain, f"*.{domain}", f"www.{domain}"}
+    subdomains = {
+        domain,
+        f"*.{domain}",
+        f"www.{domain}",
+        f"traefik.{domain}",
+        f"errors.{domain}",
+    }
     now = datetime.now()
 
     util.ensure(util.PATH_LOGS)
 
     async with httpx.AsyncClient() as client:
-        with open(util.path.logs(f"porkbun-{now.timestamp()}.log"), "a") as file:
+        with open(util.path.logs(f"porkbun-{now.isoformat(sep="-")}.log"), "a") as file:
             file.write(80 * "=")
             file.write("\nLogs for `handle_porkbun`\n\n")
             file.write("Timestamp: " + str(now))
