@@ -4,11 +4,12 @@
 import os
 from collections.abc import Sequence
 from os import path as p
-from typing import Any, Dict
+from typing import Any, Dict, Set
 
 import yaml
 from pydantic.v1.utils import deep_update
 
+print(__file__)
 PATH_BASE: str = p.realpath(p.join(p.dirname(__file__), "..", ".."))
 PATH_CONFIGS: str = p.realpath(p.join("configs"))
 PATH_ASSETS: str = p.realpath(p.join("assets"))
@@ -47,7 +48,11 @@ class path:
         return p.join(PATH_CONFIGS, *segments)
 
 
-def load(*paths: str, overwrite: Dict[str, Any] | None = None):
+def load(
+    *paths: str,
+    overwrite: Dict[str, Any] | None = None,
+    exclude: Dict[str, Any] | Set[str] | None = None,
+):
     if not len(paths):
         raise ValueError()
 
@@ -62,4 +67,19 @@ def load(*paths: str, overwrite: Dict[str, Any] | None = None):
     if overwrite is not None:
         loaded.append(overwrite)
 
-    return deep_update(*loaded)
+    data = deep_update(*loaded)
+    if exclude is None:
+        return data
+
+    cond = lambda field: data.get(field) is not None
+    if len(bad := {field for field in exclude if cond(field)}):
+        msg_fmt = "Helm values must not specify `{}`."
+        raise ValueError(msg_fmt.format(bad))
+
+    if not isinstance(exclude, dict):
+        return data
+
+    # NOTE: Adding ``None`` values in exclude will result in the field not
+    #       being set.
+    data = deep_update(data, {k: v for k, v in exclude.items() if v is not None})
+    return data

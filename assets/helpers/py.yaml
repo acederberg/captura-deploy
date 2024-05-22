@@ -1,0 +1,18 @@
+# Adding a python container to mess with network stuff. Sometimes it can be 
+# hard to gain visibility into a container since there is not very much. Not to 
+# mention that python has some very helpful tools for this use case.
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: py
+  namespace: default
+  labels:
+    acederberg.io/tier: debug
+    acederberg.io/from: manifests
+spec:
+  containers:
+    - tty: True
+      image: python:3.12
+      name: py
+      command: [bash]

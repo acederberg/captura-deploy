@@ -124,7 +124,12 @@ def create_cluster(config: pulumi.Config) -> Tuple[linode.LkeCluster, linode.Fir
     return cluster, firewall
 
 
-def create_bucket(config: pulumi.Config) -> linode.ObjectStorageBucket:
+def create_bucket(
+    config: pulumi.Config,
+) -> Tuple[
+    linode.ObjectStorageBucket,
+    linode.ObjectStorageKey,
+]:
     # NOTE: Keyword argument ``cluster`` is not the kubernetes cluster. It is
     #       instead the region in which the bucket is to exist, which is not
     #       confusing at all lol.
@@ -136,19 +141,18 @@ def create_bucket(config: pulumi.Config) -> linode.ObjectStorageBucket:
             cluster=OBJECT_STORAGE_CLUSTER,
         ),
     )
-    bucket.id.apply(
-        lambda _: linode.ObjectStorageKey(
-            "captura-object-storage",
-            linode.ObjectStorageKeyArgs(
-                label="captura-object-storage",
-                bucket_accesses=[
-                    linode.ObjectStorageKeyBucketAccessArgs(
-                        bucket_name=bucket_name,
-                        cluster=OBJECT_STORAGE_CLUSTER,
-                        permissions="read_write",
-                    )
-                ],
-            ),
-        )
+    bucket_key = linode.ObjectStorageKey(
+        "captura-object-storage",
+        linode.ObjectStorageKeyArgs(
+            label="captura-object-storage",
+            bucket_accesses=[
+                linode.ObjectStorageKeyBucketAccessArgs(
+                    bucket_name=bucket_name,
+                    cluster=OBJECT_STORAGE_CLUSTER,
+                    permissions="read_write",
+                )
+            ],
+        ),
+        opts=pulumi.ResourceOptions(depends_on=bucket),
     )
-    return bucket
+    return bucket, bucket_key

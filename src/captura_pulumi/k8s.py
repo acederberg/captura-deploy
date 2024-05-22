@@ -1,26 +1,46 @@
-"""
+"""Kubernetes for traefik, container registry, and error-pages.
+
+
+Do not add kubernetes resources for applications here, this is the 'back-ends 
+back-end'. All functions in this module require that a provider has been set up 
+first.
+
+Resource:
+
 .. code:: text
 
    [1] https://github.com/traefik/traefik-helm-chart/blob/master/EXAMPLES.md#use-traefik-native-lets-encrypt-integration-without-cert-manager
    [2] https://www.pulumi.com/registry/packages/kubernetes/how-to-guides/choosing-the-right-helm-resource-for-your-use-case/
+   [3] https://github.com/twuni/docker-registry.helm/blob/main/templates/secret.yaml
+       - Configuration specifiying the secret for the twuni helm chart.
+       - Should probably fork and improve, lots of issues.
+   [4] https://hub.docker.com/_/registry
+
+
 """
 
 # =========================================================================== #
+import base64
+import json
 from typing import Any, Dict
 
+import httpx
 import pulumi
 import pulumi_kubernetes as k8s
 import pulumi_linode as linode
-from pulumi import Config, Output
+from pulumi import Config, Output, ResourceOptions, warn
 from pulumi_kubernetes.helm.v3.helm import FetchOpts
+from rich.console import Console
 
 # --------------------------------------------------------------------------- #
 from captura_pulumi import porkbun, util
-from captura_pulumi.porkbun import PorkbunRequests
+from captura_pulumi.porkbun import PorkbunRequests, handle_porkbun
 
 # NOTE: These kubernetes object names are constants for ease of lookup.
 RE_SUBDOMAIN = "(?:[A-Za-z0-9\\-]{0,61}[A-Za-z0-9])?"
 ERROR_PAGES = "error-pages"
+
+TRAEFIK_API_VERSION = "traefik.io/v1alpha1"
 TRAEFIK_NAMESPACE = "traefik"
 TRAEFIK_RELEASE = "traefik"
 TRAEFIK_MW_DASHBOARD_BASICAUTH = "traefik-dashboard-basicauth"
@@ -31,26 +51,21 @@ TRAEFIK_MW_REQUIRED = "traefik-required"
 TRAEFIK_INGRESSROUTE_DEFAULT = "traefik-default"
 TRAEFIK_MW_CIRCUIT_BREAKER = "traefik-circuit-breaker"
 
+REGISTRY_NAMESPACE = "registry"
+REGISTRY_RELEASE = "registry"
+REGISTRY_PORT = 5000
 
-def create_traefik_values(config: Config) -> Dict[str, Any]:
-    # NOTE: Configuration of traefik will address ssl certificate automation with
-    #       acme.
-    traefik_values_path = util.path.asset("helm/traefik-values.yaml")
-    traefik_values = util.load(traefik_values_path)
 
-    # NOTE: These requirements are derivative of result of the example in [1]
-    if len(
-        bad := {
-            field
-            for field in {"extraObjects", "env", "IngressRoute"}
-            if traefik_values.get(field) is not None
-        }
-    ):
-        msg_fmt = "Helm values must not specify `{}`."
-        raise ValueError(msg_fmt.join(bad))
+def create_traefik(config: Config) -> k8s.helm.v3.Chart:
 
-    # NOTE: For dashboard login. No ingressRoute yet. Was in extraObjects, but
-    #       caused lifecycle issues.
+    # NOTE: Since visibility of traefik does not really matter here and since
+    #       hooks might be necessary, and further since releases use the built
+    #       in functionality of helm to create the release - I would rather use
+    #       the release resource. For more on the difference, see [2].
+    _ = k8s.core.v1.Namespace("traefik-namespace", metadata=dict(name="traefik"))
+    porkbun = PorkbunRequests.from_config(config)
+
+    # NOTE: For dashboard login. No ingressRoute yet.
     traefik_dash_un = config.require("traefik_dashboard_username")
     traefik_dash_pw = config.require_secret("traefik_dashboard_password")
     k8s.core.v1.Secret(
@@ -66,47 +81,6 @@ def create_traefik_values(config: Config) -> Dict[str, Any]:
         },
     )
 
-    traefik_values.update(
-        # NOTE: Wait until porkbun has updated dns.
-        ingressRoute=dict(dashboard=dict(enabled=False)),
-        env=[
-            # NOTE: Fields should match those provided in the first secret in
-            #       extra objects.
-            {
-                "name": "PORKBUN_API_KEY",
-                "valueFrom": {
-                    "secretKeyRef": {
-                        "name": "traefik-porkbun",
-                        "key": "porkbun_api_key",
-                    }
-                },
-            },
-            {
-                "name": "PORKBUN_SECRET_API_KEY",
-                "valueFrom": {
-                    "secretKeyRef": {
-                        "name": "traefik-porkbun",
-                        "key": "porkbun_secret_key",
-                    }
-                },
-            },
-        ],
-    )
-
-    return traefik_values
-
-
-def create_traefik(config: Config, *, id_cluster: str) -> k8s.helm.v3.Release:
-
-    k8s.Provider("k8s-provider", cluster=id_cluster)
-
-    # NOTE: Since visibility of traefik does not really matter here and since
-    #       hooks might be necessary, and further since releases use the built
-    #       in functionality of helm to create the release - I would rather use
-    #       the release resource. For more on the difference, see [2].
-    _ = k8s.core.v1.Namespace("traefik", metadata=dict(name="traefik"))
-    porkbun = PorkbunRequests.from_config(config)
-
     _ = k8s.core.v1.Secret(
         "traefik-secret-porkbun",
         metadata=create_metadata("traefik-porkbun"),
@@ -116,34 +90,66 @@ def create_traefik(config: Config, *, id_cluster: str) -> k8s.helm.v3.Release:
         },
     )
 
-    traefik_release = k8s.helm.v3.Release(
-        "captura-traefik",
-        k8s.helm.v3.ReleaseArgs(
-            name="traefik",
+    # NOTE: extraObjects is not allowed since it usually results in lifecycle
+    #       issues.
+    traefik_values = util.load(
+        util.path.asset("helm/traefik-values.yaml"),
+        exclude=dict(
+            extraObjects=None,
+            ingressRoute=dict(dashboard=dict(enabled=False)),
+            env=[
+                # NOTE: Fields should match those provided in the first secret in
+                #       extra objects.
+                {
+                    "name": "PORKBUN_API_KEY",
+                    "valueFrom": {
+                        "secretKeyRef": {
+                            "name": "traefik-porkbun",
+                            "key": "porkbun_api_key",
+                        }
+                    },
+                },
+                {
+                    "name": "PORKBUN_SECRET_API_KEY",
+                    "valueFrom": {
+                        "secretKeyRef": {
+                            "name": "traefik-porkbun",
+                            "key": "porkbun_secret_key",
+                        }
+                    },
+                },
+            ],
+        ),
+    )
+    assert "extraObjects" not in traefik_values
+
+    traefik_chart = k8s.helm.v3.Chart(
+        "traefik",
+        k8s.helm.v3.ChartOpts(
             chart="traefik",
-            repository_opts=k8s.helm.v3.RepositoryOptsArgs(
-                repo="https://traefik.github.io/charts",
-            ),
+            fetch_opts=k8s.helm.v3.FetchOpts(repo="https://traefik.github.io/charts"),
             namespace=TRAEFIK_NAMESPACE,
-            values=create_traefik_values(config),
+            values=traefik_values,
         ),
     )
 
-    traefik_release.id.apply(lambda _: handle_porkbun_traefik(config))
-    return traefik_release
-
-
-def handle_porkbun_traefik(config: Config) -> None:
-
-    release_name = TRAEFIK_NAMESPACE + "/" + TRAEFIK_RELEASE
-    traefik = k8s.core.v1.Service.get("captura-traefik", release_name)
     Output.all(
-        domain := config.require("domain"),
-        traefik.status.load_balancer.ingress[0].ip,
-    ).apply(lambda data: porkbun.handle_porkbun(domain=data[0], ipaddr=data[1]))
+        config.require("domain"),
+        traefik_chart.resources,
+        traefik_chart.ready,
+    ).apply(lambda d: handle_porkbun_traefik(*d[:2]))
+
+    return traefik_chart
 
 
-def create_error_pages(config: pulumi.Config, *, namespace: str):
+def handle_porkbun_traefik(domain: str, resources):
+    # NOTE: Resource keys are structured like {apiVersion}/{kind}:{namespace/name}
+    traefik_service = resources[f"v1/Service:{TRAEFIK_NAMESPACE}/traefik"]
+    ip = traefik_service.status.load_balancer.ingress[0].ip
+    ip.apply(lambda ipaddr: handle_porkbun(domain=domain, ipaddr=ipaddr))
+
+
+def create_error_pages(config: pulumi.Config):
     domain = config.require("domain")
     labels = {
         f"{domain}/tier": "base",
@@ -212,12 +218,131 @@ def create_error_pages(config: pulumi.Config, *, namespace: str):
     )
 
 
-def create_metadata(v: str, **kwargs):
-    kwargs.update(name=v, namespace="traefik")
+def create_registry(
+    config: pulumi.Config,
+    *,
+    access_key: str,
+    secret_key: str,
+    cluster: str,
+    endpoint: str,
+    label: str,
+) -> k8s.helm.v3.Chart:
+    # NOTE: https://github.com/opencontainers/distribution-spec
+    # NOTE: https://github.com/distribution/distribution
+
+    k8s.core.v1.Namespace("registry-namespace", metadata=dict(name=REGISTRY_NAMESPACE))
+
+    # k8s.core.v1.Secret(
+    #     "registry-s3-secret",
+    #     metadata=create_metadata(REGISTRY_NAMESPACE + "-s3"),
+    #     string_data={
+    #         "accessKey": access_key,
+    #         "secretKey": secret_key,
+    #     },
+    # )
+
+    # NOTE: The haSharedSecret field is required to get the secret to not
+    #       be replaced every time pulumi up is run (because it is otherwise
+    #       a random value, see [3].
+    # NOTE: Generating the htpasswd is a pain in the ass. Do
+    #
+    #       .. code:: sh
+    #
+    #          HTPASSWD_OUT=$( htpasswd -nbB username password )
+    #          pulumi config --secret registry_htpasswd HTPASSWD_OUT
+    #
+    registry_htpasswd = config.require_secret("registry_htpasswd")
+    registry_hasharedsecret = config.require_secret("registry_hasharedsecret")
+    registry_values = util.load(
+        util.path.asset("helm/registry-values.yaml"),
+        exclude={
+            "secrets": {
+                "haSharedSecret": registry_hasharedsecret,
+                "htpasswd": registry_htpasswd,
+                "s3": {"accessKey": access_key, "secretKey": secret_key},
+            },
+            "s3": {
+                "region": cluster,
+                "regionEndpoint": endpoint,
+                "secure": True,
+                "bucket": label,
+            },
+        },
+    )
+    # Console().print_json(json.dumps(registry_values, default=str))
+    # assert False
+
+    registry = k8s.helm.v3.Chart(
+        "registry",
+        k8s.helm.v3.ChartOpts(
+            chart="docker-registry",
+            fetch_opts=k8s.helm.v3.FetchOpts(
+                repo="https://helm.twun.io",
+            ),
+            namespace=REGISTRY_NAMESPACE,
+            values=registry_values,
+        ),
+    )
+
+    domain = config.require("domain")
+    labels = {
+        f"{domain}/tier": "base",
+        f"{domain}/from": "pulumi",
+        f"{domain}/component": "registry",
+    }
+
+    id = f"v1/Service:{REGISTRY_NAMESPACE}/registry-docker-registry"
+    service = registry.resources[id]
+    routes = [
+        {
+            "kind": "Rule",
+            "match": "HOST(`registry.acederberg.io`)",
+            "middlewares": [
+                {
+                    "name": TRAEFIK_MW_REQUIRED,
+                    "namespace": TRAEFIK_NAMESPACE,
+                },
+                {
+                    "name": TRAEFIK_MW_ERROR_PAGES,
+                    "namespace": TRAEFIK_NAMESPACE,
+                },
+            ],
+            "services": [
+                {
+                    "name": service.metadata.name,
+                    "kind": "Service",
+                    "namespace": service.metadata.namespace,
+                    "port": REGISTRY_PORT,
+                }
+            ],
+        }
+    ]
+    k8s.apiextensions.CustomResource(
+        "registry-ingressroute",
+        api_version=TRAEFIK_API_VERSION,
+        kind="IngressRoute",
+        metadata=create_metadata(
+            REGISTRY_RELEASE,
+            REGISTRY_NAMESPACE,
+            labels=labels,
+        ),
+        spec={
+            "entryPoints": ["websecure"],
+            "routes": routes,
+            "tls": {"certResolver": "letsencrypt"},
+        },
+        opts=ResourceOptions(depends_on=service),
+    )
+
+    return registry
+
+
+def create_metadata(v: str, namespace: str | None = None, **kwargs):
+    kwargs.update(name=v, namespace=namespace or TRAEFIK_NAMESPACE)
     return kwargs
 
 
-def create_traefik_ingressroutes(config: pulumi.Config, *, namespace: str):
+def create_traefik_ingressroutes(config: pulumi.Config):
     # --------------------------------------------------------------- #
     # Middlewares.
     domain = config.require("domain")
@@ -229,7 +354,7 @@ def create_traefik_ingressroutes(config: pulumi.Config, *, namespace: str):
 
     k8s.apiextensions.CustomResource(
         "traefik-mw-error-pages",
-        api_version="traefik.io/v1alpha1",
+        api_version=TRAEFIK_API_VERSION,
         kind="Middleware",
         metadata=create_metadata(TRAEFIK_MW_ERROR_PAGES, labels=labels),
         spec={
@@ -237,7 +362,7 @@ def create_traefik_ingressroutes(config: pulumi.Config, *, namespace: str):
                 "status": ["400-499", "500-599"],
                 "query": "/{status}.html",
                 "service": {
-                    "namespace": namespace,
+                    "namespace": TRAEFIK_NAMESPACE,
                     "name": ERROR_PAGES,
                     "port": 8080,
                 },
@@ -247,7 +372,7 @@ def create_traefik_ingressroutes(config: pulumi.Config, *, namespace: str):
 
     k8s.apiextensions.CustomResource(
         "traefik-mw-dashboard-auth",
-        api_version="traefik.io/v1alpha1",
+        api_version=TRAEFIK_API_VERSION,
         kind="Middleware",
         metadata=create_metadata(TRAEFIK_MW_DASHBOARD_BASICAUTH, labels=labels),
         spec={"basicAuth": {"secret": TRAEFIK_MW_DASHBOARD_BASICAUTH}},
@@ -255,7 +380,7 @@ def create_traefik_ingressroutes(config: pulumi.Config, *, namespace: str):
 
     k8s.apiextensions.CustomResource(
         "traefik-mw-dashboard-ratelimit",
-        api_version="traefik.io/v1alpha1",
+        api_version=TRAEFIK_API_VERSION,
         kind="Middleware",
         metadata=create_metadata(TRAEFIK_MW_RATELIMIT, labels=labels),
         spec={"rateLimit": {"average": 100, "burst": 200}},
@@ -263,7 +388,7 @@ def create_traefik_ingressroutes(config: pulumi.Config, *, namespace: str):
 
     k8s.apiextensions.CustomResource(
         "traefik-mw-redirect-wildcard",
-        api_version="traefik.io/v1alpha1",
+        api_version=TRAEFIK_API_VERSION,
         kind="Middleware",
         metadata=create_metadata(TRAEFIK_MW_REDIRECT_WILDCARD, labels=labels),
         spec={
@@ -276,7 +401,7 @@ def create_traefik_ingressroutes(config: pulumi.Config, *, namespace: str):
 
     k8s.apiextensions.CustomResource(
         "traefik-mw-circuit-breaker",
-        api_version="traefik.io/v1alpha1",
+        api_version=TRAEFIK_API_VERSION,
         kind="Middleware",
         metadata=create_metadata(TRAEFIK_MW_CIRCUIT_BREAKER),
         spec={
@@ -288,7 +413,7 @@ def create_traefik_ingressroutes(config: pulumi.Config, *, namespace: str):
 
     k8s.apiextensions.CustomResource(
         "traefik-mw-required",
-        api_version="traefik.io/v1alpha1",
+        api_version=TRAEFIK_API_VERSION,
         kind="Middleware",
         metadata=create_metadata(TRAEFIK_MW_REQUIRED),
         spec={
@@ -351,14 +476,17 @@ def create_traefik_ingressroutes(config: pulumi.Config, *, namespace: str):
         },
     ]
 
-    k8s.apiextensions.CustomResource(
-        "traefik-ingressroute-default",
-        api_version="traefik.io/v1alpha1",
-        kind="IngressRoute",
-        metadata=create_metadata(TRAEFIK_INGRESSROUTE_DEFAULT, labels=labels),
-        spec={
-            "entryPoints": ["websecure"],
-            "routes": routes,
-            "tls": {"certResolver": "letsencrypt"},
-        },
-    )
+    # NOTE: Because traefik misconfiguration results in letsencrypt rate limit
+    #       issues.
+    if config.require_bool("traefik_include_ingressroutes"):
+        k8s.apiextensions.CustomResource(
+            "traefik-ingressroute-default",
+            api_version=TRAEFIK_API_VERSION,
+            kind="IngressRoute",
+            metadata=create_metadata(TRAEFIK_INGRESSROUTE_DEFAULT, labels=labels),
+            spec={
+                "entryPoints": ["websecure"],
+                "routes": routes,
+                "tls": {"certResolver": "letsencrypt"},
+            },
+        )

@@ -15,15 +15,31 @@ def create_captura():
 
     # Create cluster an buckets.
     cluster, _ = linode.create_cluster(config)
-    _ = linode.create_bucket(config)
+    bucket, bucket_key = linode.create_bucket(config)
 
     # Create traefik.
-    traefik = cluster.id.apply(
-        lambda id_cluster: k8s.create_traefik(config, id_cluster=id_cluster)
+
+    traefik = (
+        cluster.id.apply(lambda id: k8s.k8s.Provider("k8s-provider", cluster=id))
+        .apply(lambda _: k8s.create_traefik(config))
+        .apply(lambda _: k8s.create_error_pages(config))
+        .apply(lambda _: k8s.create_traefik_ingressroutes(config))
     )
-    error_pages = traefik.namespace.apply(
-        lambda ns: k8s.create_error_pages(config, namespace=ns)
-    )
-    traefik.namespace.apply(
-        lambda ns: k8s.create_traefik_ingressroutes(config, namespace=ns)
+
+    pulumi.Output.all(
+        traefik,
+        bucket_key.access_key,
+        bucket_key.secret_key,
+        bucket.cluster,
+        bucket.endpoint,
+        bucket.label,
+    ).apply(
+        lambda data: k8s.create_registry(
+            config,
+            access_key=data[1],
+            secret_key=data[2],
+            cluster=data[3],
+            endpoint=data[4],
+            label=data[5],
+        )
     )

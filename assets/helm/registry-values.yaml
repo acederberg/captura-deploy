@@ -1,0 +1,24 @@
+# NOTE: Secrets add in ``create_twuni_values``.
+# NOTE: Runs on this image: docker.io/library/registry:2.8.1, read https://hub.docker.com/_/registry
+
+---
+# NOTE: Idk if we need the volume claim. I'd like to think that providing the
+#       s3 instance should work.
+# persistence:
+#   enabled: true
+ingress:
+  enabled: false
+storage: s3
+configData:
+  log:
+    level: debug
+
+# NOTE: For debugging.
+# secrets:
+#   s3:
+#     secretKey: 12345a
+#     accessKey: bcdefg
+# s3:
+#   region: urmomshouse
+#   endpoint: whatever.acederberg.io
+#   bucket: whatever
