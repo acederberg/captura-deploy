@@ -8,3 +8,7 @@ venv
 configs
 manifests
 logs
+htpasswd
+*.pem
+*.crt
+*.key

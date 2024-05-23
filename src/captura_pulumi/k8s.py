@@ -15,6 +15,7 @@ Resource:
        - Configuration specifiying the secret for the twuni helm chart.
        - Should probably fork and improve, lots of issues.
    [4] https://hub.docker.com/_/registry
+   [5] https://distribution.github.io/distribution/storage-drivers/s3
 
 
 """
@@ -43,9 +44,10 @@ ERROR_PAGES = "error-pages"
 TRAEFIK_API_VERSION = "traefik.io/v1alpha1"
 TRAEFIK_NAMESPACE = "traefik"
 TRAEFIK_RELEASE = "traefik"
-TRAEFIK_MW_DASHBOARD_BASICAUTH = "traefik-dashboard-basicauth"
+TRAEFIK_MW_BASICAUTH = "traefik-basicauth"
 TRAEFIK_MW_RATELIMIT = "traefik-ratelimit"
 TRAEFIK_MW_REDIRECT_WILDCARD = "traefik-redirect-wildcard"
+TRAEFIK_MW_REGISTRY_HEADERS = "traefik-registry-headers"
 TRAEFIK_MW_ERROR_PAGES = "traefik-error-pages"
 TRAEFIK_MW_REQUIRED = "traefik-required"
 TRAEFIK_INGRESSROUTE_DEFAULT = "traefik-default"
@@ -64,22 +66,6 @@ def create_traefik(config: Config) -> k8s.helm.v3.Chart:
     #       the release resource. For more on the difference, see [2].
     _ = k8s.core.v1.Namespace("traefik-namespace", metadata=dict(name="traefik"))
     porkbun = PorkbunRequests.from_config(config)
-
-    # NOTE: For dashboard login. No ingressRoute yet.
-    traefik_dash_un = config.require("traefik_dashboard_username")
-    traefik_dash_pw = config.require_secret("traefik_dashboard_password")
-    k8s.core.v1.Secret(
-        "traefik-secret-dashboard-basicauth",
-        metadata={
-            "name": TRAEFIK_MW_DASHBOARD_BASICAUTH,
-            "namespace": "traefik",
-        },
-        type="kubernetes.io/basic-auth",
-        string_data={
-            "username": traefik_dash_un,
-            "password": traefik_dash_pw,
-        },
-    )
 
     _ = k8s.core.v1.Secret(
         "traefik-secret-porkbun",
@@ -251,14 +237,17 @@ def create_registry(
     #          HTPASSWD_OUT=$( htpasswd -nbB username password )
     #          pulumi config --secret registry_htpasswd HTPASSWD_OUT
     #
-    registry_htpasswd = config.require_secret("registry_htpasswd")
+    # registry_htpasswd = config.require_secret("registry_htpasswd")
     registry_hasharedsecret = config.require_secret("registry_hasharedsecret")
+
+    domain = config.require("domain")
+    host = f"registry.{domain}"
     registry_values = util.load(
         util.path.asset("helm/registry-values.yaml"),
         exclude={
             "secrets": {
                 "haSharedSecret": registry_hasharedsecret,
-                "htpasswd": registry_htpasswd,
+                # "htpasswd": registry_htpasswd,
                 "s3": {"accessKey": access_key, "secretKey": secret_key},
             },
             "s3": {
@@ -268,6 +257,7 @@ def create_registry(
                 "bucket": label,
             },
         },
+        overwrite=dict(configData=dict(http=dict(host=host))),
     )
     # Console().print_json(json.dumps(registry_values, default=str))
     # assert False
@@ -284,26 +274,53 @@ def create_registry(
         ),
     )
 
-    domain = config.require("domain")
     labels = {
         f"{domain}/tier": "base",
         f"{domain}/from": "pulumi",
         f"{domain}/component": "registry",
     }
 
+    k8s.apiextensions.CustomResource(
+        "traefik-mw-registry-headers",
+        api_version=TRAEFIK_API_VERSION,
+        kind="Middleware",
+        metadata=create_metadata(TRAEFIK_MW_REGISTRY_HEADERS, labels=labels),
+        spec={
+            "headers": {
+                "customRequestHeaders": {
+                    "Docker-Distribution-Api-Version": "registry/2.0"
+                }
+            }
+        },
+    )
+
     id = f"v1/Service:{REGISTRY_NAMESPACE}/registry-docker-registry"
     service = registry.resources[id]
     routes = [
         {
             "kind": "Rule",
-            "match": "HOST(`registry.acederberg.io`)",
+            "match": f"HOST(`{host}`)",
             "middlewares": [
+                # NOTE: Somehow these commented middlewares break login. WTF!
+                #       DO NOT UNCOMMENT OR DELETE THIS! IT TOOK SO LONG TO
+                #       FIND THIS BUG!
+                #
+                # .. code:: sh
+                #
+                #   {
+                #       "name": TRAEFIK_MW_REQUIRED,
+                #       "namespace": TRAEFIK_NAMESPACE,
+                #   },
+                #   {
+                #       "name": TRAEFIK_MW_ERROR_PAGES,
+                #       "namespace": TRAEFIK_NAMESPACE,
+                #   },
                 {
-                    "name": TRAEFIK_MW_REQUIRED,
+                    "name": TRAEFIK_MW_REGISTRY_HEADERS,
                     "namespace": TRAEFIK_NAMESPACE,
                 },
                 {
-                    "name": TRAEFIK_MW_ERROR_PAGES,
+                    "name": TRAEFIK_MW_BASICAUTH,
                     "namespace": TRAEFIK_NAMESPACE,
                 },
             ],
@@ -352,6 +369,22 @@ def create_traefik_ingressroutes(config: pulumi.Config):
         f"{domain}/component": "traefik",
     }
 
+    # NOTE: For dashboard login. No ingressRoute yet.
+    traefik_dash_un = config.require("traefik_dashboard_username")
+    traefik_dash_pw = config.require_secret("traefik_dashboard_password")
+    k8s.core.v1.Secret(
+        "traefik-secret-dashboard-basicauth",
+        metadata={
+            "name": TRAEFIK_MW_BASICAUTH,
+            "namespace": "traefik",
+        },
+        type="kubernetes.io/basic-auth",
+        string_data={
+            "username": traefik_dash_un,
+            "password": traefik_dash_pw,
+        },
+    )
+
     k8s.apiextensions.CustomResource(
         "traefik-mw-error-pages",
         api_version=TRAEFIK_API_VERSION,
@@ -374,8 +407,8 @@ def create_traefik_ingressroutes(config: pulumi.Config):
         "traefik-mw-dashboard-auth",
         api_version=TRAEFIK_API_VERSION,
         kind="Middleware",
-        metadata=create_metadata(TRAEFIK_MW_DASHBOARD_BASICAUTH, labels=labels),
-        spec={"basicAuth": {"secret": TRAEFIK_MW_DASHBOARD_BASICAUTH}},
+        metadata=create_metadata(TRAEFIK_MW_BASICAUTH, labels=labels),
+        spec={"basicAuth": {"secret": TRAEFIK_MW_BASICAUTH}},
     )
 
     k8s.apiextensions.CustomResource(
@@ -467,7 +500,7 @@ def create_traefik_ingressroutes(config: pulumi.Config):
             "priority": 2,
             "match": f"HOST(`traefik.{domain}`)",
             "middlewares": [
-                {"name": TRAEFIK_MW_DASHBOARD_BASICAUTH},
+                {"name": TRAEFIK_MW_BASICAUTH},
                 {"name": TRAEFIK_MW_REQUIRED},
                 {"name": TRAEFIK_MW_ERROR_PAGES},
             ],

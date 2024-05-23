@@ -9,9 +9,13 @@
 ingress:
   enabled: false
 storage: s3
-configData:
-  log:
-    level: debug
+image:
+  repository: registry
+  tag: 2
+
+# configData:
+#   log:
+#     level: debug
 
 # NOTE: For debugging.
 # secrets:
