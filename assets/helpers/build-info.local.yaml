@@ -1,0 +1,15 @@
+options:
+  tier: base
+git:
+  path: . # Relative to invocation. This assumes the project is running at the project root.
+  repository: https://github.com/acederberg/captura-pipelines.git
+  branch: master
+  dockerfile: docker/dockerfile
+  dockertarget: pipelines
+  pull: False
+image:
+  target: pipelines
+  repository: pipelines
+  tags: ["ci", "pipelines"]
+  push: False
+

@@ -1,0 +1,30 @@
+FROM python:3.12 AS base
+
+RUN useradd -d /home/pipelines pipelines \
+  && mkdir /home/pipelines \
+  && chown pipelines:pipelines /home/pipelines
+
+USER pipelines
+WORKDIR /app
+COPY --chown=pipelines:pipelines --chmod=+x ../.. /app
+RUN pip install .
+
+ENTRYPOINT ["bash"]
+
+
+# --------------------------------------------------------------------------- #
+
+FROM base AS pipeline
+
+RUN pip install .[pipelines]
+
+
+
+FROM pipeline AS pipeline-test
+
+RUN pip install .[test]
+
+
+# --------------------------------------------------------------------------- #
+# FROM base AS pulumie
+

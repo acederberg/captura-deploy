@@ -24,16 +24,24 @@ classifiers = [
 
 requires-python = ">=3.7" # because https://github.com/pydantic/pydantic/blob/main/pyproject.toml
 dependencies = [
-  "pulumi>=3",
-  "pulumi_linode>=4.8.1",
-  "pulumi_kubernetes>=4.4.0",
   "pydantic",
-  "pyyaml"
+  "pyyaml",
+  "httpx"
 ]
 
 
 [project.optional-dependencies]
 dev = ["linode-cli"]
+pipelines = ["GitPython", "docker"]
+pulumi = [
+  "pulumi>=3",
+  "pulumi_linode>=4.8.1",
+  "pulumi_kubernetes>=4.4.0",
+]
+
+
+[project.scripts]
+pipelines = "captura_pipelines.__main__:main"
 
 
 [tool.black]
@@ -75,6 +83,3 @@ recursive = true
 [tool.mypy]
 ignore_missing_imports = true
 plugins = ["pydantic.mypy"]
-
-
-

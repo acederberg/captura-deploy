@@ -1,15 +1,18 @@
 # =========================================================================== #
 
 # =========================================================================== #
+import enum
 import os
 from collections.abc import Sequence
 from os import path as p
-from typing import Any, Dict, Set
+from typing import Any, Dict, Self, Set
 
 import yaml
+from jsonpath_ng import parse
+from pydantic import BaseModel
 from pydantic.v1.utils import deep_update
 
-print(__file__)
+DOMAIN: str = "acederberg.io"
 PATH_BASE: str = p.realpath(p.join(p.dirname(__file__), "..", ".."))
 PATH_CONFIGS: str = p.realpath(p.join("configs"))
 PATH_ASSETS: str = p.realpath(p.join("assets"))
@@ -24,10 +27,6 @@ def ensure(dirpath: str):
         return
 
     os.mkdir(dirpath)
-
-
-ensure(PATH_LOGS)
-ensure(PATH_CONFIGS)
 
 
 class path:
@@ -83,3 +82,49 @@ def load(
     #       being set.
     data = deep_update(data, {k: v for k, v in exclude.items() if v is not None})
     return data
+
+
+# NOTE: Might want to move to yaml-settings-pydantic. This functionality goes
+#       along with that code very well.
+class BaseYAML(BaseModel):
+
+    # NOTE: When this is added to pydantic yaml settings I'd like to make paths
+    #       into YamlFileConfigDict.
+    @classmethod
+    def fromYAML(cls, *paths: str, subpath: str | None = None, **overwrite) -> Self:
+
+        data = load(*paths, overwrite=overwrite)
+        if subpath is not None:
+            subpath_parsed = parse(subpath)
+            data = next(iter(subpath_parsed.find(data)), None)
+
+        return cls.model_validate(data)
+
+
+class LabelTier(str, enum.Enum):
+    base = "base"
+    client = "client"
+    api = "api"
+
+
+class LabelComponent(str, enum.Enum):
+    traefik = "traefik"
+    error_pages = "error-pages"
+    registry = "registry"
+
+
+def create_labels(
+    domain: str = DOMAIN,
+    *,
+    tier: LabelTier,
+    component: LabelComponent,
+    from_: str,
+    **extra: str,
+):
+    tags = {"tier": tier.value, "component": component.value, "from": from_, **extra}
+    return {f"{domain}/{field}": value for field, value in tags.items()}
+
+
+if __name__ == "__main__":
+    ensure(PATH_LOGS)
+    ensure(PATH_CONFIGS)

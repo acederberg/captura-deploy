@@ -291,7 +291,9 @@ async def handle_porkbun(*, domain: str, ipaddr: str):
     util.ensure(util.PATH_LOGS)
 
     async with httpx.AsyncClient() as client:
-        with open(util.path.logs(f"porkbun-{now.isoformat(sep="-")}.log"), "a") as file:
+        logfile_timestamp = now.isoformat(sep="-")
+        logfile_path = util.path.logs(f"porkbun-{logfile_timestamp}.log")
+        with open(logfile_path, "a") as file:
             file.write(80 * "=")
             file.write("\nLogs for `handle_porkbun`\n\n")
             file.write("Timestamp: " + str(now))

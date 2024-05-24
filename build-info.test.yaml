@@ -1,0 +1,16 @@
+options:
+  tier: base
+  push: False
+git:
+  repository: https://github.com/acederberg/captura-pipelines.git
+  branch: master
+  dockerdir: docker
+  dockerfile: dockerfile
+  dockertarget: test
+image:
+  target: pipelines
+  repository: pipelines
+  tags: ["test", "ci", "pipelines"]
+  labels: []
+
+

@@ -49,23 +49,18 @@ class TestConfig(BaseYamlSettings):
     domain: str
 
     # NOTE: Should be found in configs/pytest.yaml
-    registry_username: str
-    registry_password: str
+    # registry_username: str
+    # registry_password: str
 
-    @property
-    def registry_basicauth(self) -> str:
-        auth = f"{self.registry_username}:{self.registry_password}"
-        return base64.b64encode(auth.encode()).decode()
-
-    @property
-    def registry_xregauth(self) -> str:
-        auth = {
-            "username": self.registry_username,
-            "password": self.registry_password,
-            "email": "acederberg@acederberg.io",
-            "serveraddress": f"registry.{self.domain}",
-        }
-        return base64.b64encode(json.dumps(auth).encode()).decode()
+    # @property
+    # def registry_xregauth(self) -> str:
+    #     auth = {
+    #         "username": self.registry_username,
+    #         "password": self.registry_password,
+    #         "email": "acederberg@acederberg.io",
+    #         "serveraddress": f"registry.{self.domain}",
+    #     }
+    #     return base64.b64encode(json.dumps(auth).encode()).decode()
 
     # NOTE: Prototyping. Not adding all methods now.
     def require(self, field: str) -> str:

@@ -12,3 +12,4 @@ htpasswd
 *.pem
 *.crt
 *.key
+.builder

@@ -137,11 +137,12 @@ def handle_porkbun_traefik(domain: str, resources):
 
 def create_error_pages(config: pulumi.Config):
     domain = config.require("domain")
-    labels = {
-        f"{domain}/tier": "base",
-        f"{domain}/from": "pulumi",
-        f"{domain}/component": "error-pages",
-    }
+    labels = util.create_labels(
+        domain,
+        tier=util.LabelTier.base,
+        component=util.LabelComponent.error_pages,
+        from_="pulumi",
+    )
 
     selector = k8s.meta.v1.LabelSelectorArgs(match_labels=labels)
     metadata = k8s.meta.v1.ObjectMetaArgs(
@@ -274,11 +275,12 @@ def create_registry(
         ),
     )
 
-    labels = {
-        f"{domain}/tier": "base",
-        f"{domain}/from": "pulumi",
-        f"{domain}/component": "registry",
-    }
+    labels = util.create_labels(
+        domain,
+        tier=util.LabelTier.base,
+        component=util.LabelComponent.error_pages,
+        from_="pulumi",
+    )
 
     k8s.apiextensions.CustomResource(
         "traefik-mw-registry-headers",
@@ -363,11 +365,12 @@ def create_traefik_ingressroutes(config: pulumi.Config):
     # --------------------------------------------------------------- #
     # Middlewares.
     domain = config.require("domain")
-    labels = {
-        f"{domain}/tier": "base",
-        f"{domain}/from": "pulumi",
-        f"{domain}/component": "traefik",
-    }
+    labels = util.create_labels(
+        domain,
+        tier=util.LabelTier.base,
+        component=util.LabelComponent.traefik,
+        from_="pulumi",
+    )
 
     # NOTE: For dashboard login. No ingressRoute yet.
     traefik_dash_un = config.require("traefik_dashboard_username")
