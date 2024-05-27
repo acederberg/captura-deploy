@@ -3,14 +3,15 @@ import base64
 
 import docker
 import httpx
+from build.lib.captura_pipelines.builder import BuilderCommand
 
 # --------------------------------------------------------------------------- #
 from captura_pipelines.builder import (
     PATTERN_GITHUB,
-    BuildGitInfo,
-    BuildImageInfo,
-    BuildInfo,
-    BuildOptions,
+    Builder,
+    BuilderGit,
+    BuilderImage,
+    BuilderOptions,
 )
 from captura_pipelines.config import PipelineConfig
 from captura_pulumi import util
@@ -75,42 +76,42 @@ def test_pattern_github():
     assert m.group("path") == None
 
 
-class TestBuildInfo:
+class TestBuilder:
     def test_properties(self, config_pipelines: PipelineConfig):
 
-        build_info = BuildInfo(
+        builder = Builder(
             config=config_pipelines,
-            image=BuildImageInfo(
+            image=BuilderImage(
                 repository="test-properties",
                 tags={"test", "properties"},
                 labels=dict(test="properties", because="necessary"),
+                push=False,
             ),
-            git=BuildGitInfo(
+            git=BuilderGit(  # type: ignore
+                pull=False,
                 repository="https://github.com/acederberg/captura",
                 branch="master",
                 tag=None,
                 commit=None,
-                dockerdir="docker",
                 dockerfile="dockerfile",
                 dockertarget=None,
             ),
-            options=BuildOptions(
+            options=BuilderOptions(
                 tier=util.LabelTier.base,
-                push=False,
             ),
         )
 
-        # NOTE: Check git commit and git path.
-        assert build_info.git.commit is None
-        build_info.git.configure(build_info.git_path)
-        assert build_info.git.commit is not None
-        assert isinstance(build_info.git.commit, str)
+        # NOTE: Check git commit and git( path.
+        assert builder.git.commit is None
+        builder.git.configure(builder.git.path)
+        assert builder.git.commit is not None
+        assert isinstance(builder.git.commit, str)
 
-        assert util.p.basename(build_info.git_path) == build_info.image.repository
-        assert util.p.isdir(build_info.git_path)
+        assert util.p.basename(builder.git.path) == builder.image.repository
+        assert util.p.isdir(builder.git.path)
 
         # NOTE: Check labels and tags.
-        labels = build_info.image_labels
+        labels = builder.image_labels
         assert isinstance(labels, dict)
         assert len(labels) == 5
         assert labels["acederberg.io/from"] == "builder"
@@ -119,13 +120,26 @@ class TestBuildInfo:
         assert labels["acederberg.io/test"] == "properties"
         assert labels["acederberg.io/because"] == "necessary"
 
-        tags = build_info.image_tags
-        commit = build_info.git.commit
+        tags = builder.image_tags
+        commit = builder.git.commit
         assert f"acederberg.io/test-properties:{commit}" in tags
         assert len(tags) == 3
 
-    def test_execute(self):
-        # NOTE: Build self tests using the local docker client.
+    def test_execute(self, config_pipelines: PipelineConfig):
+        # NOTE: Builder self tests using the local docker client.
         # NOTE: Run some basic tests in the client.
-        # BuilderCommand
-        ...
+        image = BuilderImage(
+            repository="test_execute",
+            tags={"tests/test_k8s.py"},
+            labels=dict(test="tests/test_k8s:TestBuilder.test_execute"),
+            push=False,
+        )
+        builder = Builder.fromYAML(
+            util.path.asset("helpers/build-file.local.yaml"),
+            config=config_pipelines,
+            image=image,
+        )
+
+        client = builder.config.registry.create_client()
+        client.images.list(builder.image_full)
+        builder.execute(client)

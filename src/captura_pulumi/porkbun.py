@@ -155,21 +155,22 @@ class PorkbunRequests(BaseYamlSettings):
     # Executers
 
     def check(
-        self, res: httpx.Response, *, status_code: int = 200
+        self,
+        res: httpx.Response,
+        *,
+        status_code: int = 200,
     ) -> Tuple[Any, AssertionError | None]:
-        data = res.json()
-        if res.status_code != status_code:
-            msg = "Expected response status code `{}`, got `{}`. Data=`{}`."
-            err = AssertionError(msg.format(res.status_code, status_code, data))
-            return data, err
+        err, data = util.check(res, status_code=status_code)
+        if err is not None:
+            return err, data
 
-        err = None
+        assert isinstance(data, dict), "Data should be a dictionary."
         if data["status"] != "SUCCESS":
             err = AssertionError(
                 f"`status` should be `SUCCESS`, got `{data['success']}`."
             )
 
-        return data, err
+        return err, data
 
     async def dispatch(
         self,
@@ -183,7 +184,7 @@ class PorkbunRequests(BaseYamlSettings):
 
         res = await client.send(fn(*args, **kwargs))
         data = self.check(res, status_code=200)
-        console.print_json(json.dumps(data))
+        CONSOLE.print_json(json.dumps(data))
 
     async def replace(
         self,

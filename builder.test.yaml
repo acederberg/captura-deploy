@@ -4,10 +4,11 @@ options:
 git:
   repository: https://github.com/acederberg/captura-pipelines.git
   branch: master
-  dockerfile: docker/dockerfile
-  dockertarget: pipelines
+  dockerdir: docker
+  dockerfile: dockerfile
+  dockertarget: test
 image:
-  target: pipelines
-  repository: pipelines
-  tags: ["ci", "pipelines"]
+  target: pipeline
+  repository: pipeline/test
+
 

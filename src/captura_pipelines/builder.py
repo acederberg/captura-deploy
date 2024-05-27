@@ -61,6 +61,7 @@ from rich.syntax import Syntax
 from captura_pipelines import flags
 from captura_pipelines.config import PipelineConfig
 from captura_pulumi import util
+from captura_pulumi.porkbun import CONSOLE
 from captura_pulumi.util import BaseYAML
 
 BUILDFILE = "build.yaml"
@@ -78,7 +79,7 @@ class BuilderImage(BaseYAML):
     ]
     tags: Annotated[
         Set[str],
-        Field(default_factory=list),
+        Field(default_factory=set),
     ]
     labels: Annotated[Dict[str, str], Field(default_factory=dict)]
     push: Annotated[bool, Field(default=False)]
@@ -140,11 +141,6 @@ class BuilderGit(BaseYAML):
         values["path"] = util.p.join(PATH_CLONE, matched.group("repository"))
         return values
 
-    # @computed_field
-    # @property
-    # def git_path(self) -> str:
-    #     return util.p.join(PATH_CLONE, self.image.repository)
-
     @classmethod
     def ensure(cls, repository: str, path: str) -> git.Repo:
         print(util.p.abspath(path))
@@ -189,19 +185,34 @@ class Builder(BaseYAML):
     def fromBuilderFile(
         cls,
         config: PipelineConfig,
-        build_yaml_url_raw: str,
+        *,
+        url: str | None = None,
+        path: str | None = None,
     ) -> Self:
 
-        # NOTE: Look for build info instead of cloning and expecting it.
-        res = httpx.get(build_yaml_url_raw)
-        if res.status_code != 200:
-            msg = f"Could not find build info at `{build_yaml_url_raw}`."
-            raise ValueError(msg)
+        if url is not None and path is not None:
+            raise ValueError()
+        elif url is None and path is None:
+            raise ValueError()
 
-        return cls.fromYAML(
-            overwrite=yaml.safe_load(res.content),
-            exclude={"config": config},
-        )
+        # NOTE: Look for build info instead of cloning and expecting it.
+        if url is not None:
+            res = httpx.get(url)
+            if res.status_code != 200:
+                msg = f"Could not find build info at `{url}`."
+                raise ValueError(msg)
+            return cls.fromYAML(
+                overwrite=yaml.safe_load(res.content),
+                exclude={"config": config},
+            )
+        else:
+            assert path is not None
+            return cls.fromYAML(path, exclude={"config": config})
+
+    @computed_field
+    @property
+    def image_full(self) -> str:
+        return f"{self.config.registry.registry}/{self.image.repository}"
 
     @computed_field
     @property
@@ -218,7 +229,10 @@ class Builder(BaseYAML):
            release     -> {Pyproject TOML version}
 
         """
-        tags = {self.git.commit}
+        tags = set()
+        if self.git.commit is not None:
+            tags.add(self.git.commit)
+
         if self.git.tag:
             version = self.git.tag
             if self.git.branch == "master" or self.git.branch == "main":
@@ -229,7 +243,7 @@ class Builder(BaseYAML):
             tags.add(version)
 
         tags |= self.image.tags
-        return {f"{util.DOMAIN}/{self.image.repository}:{tag}" for tag in tags}
+        return {f"{self.image_full}:{tag}" for tag in tags}
 
     @computed_field
     @property
@@ -242,14 +256,17 @@ class Builder(BaseYAML):
             **self.image.labels,
         )
 
-    # @computed_field
-    # @property
-    # def git_path(self) -> str:
-    #     return util.p.join(PATH_CLONE, self.image.repository)
+    def req_list_tags(self) -> httpx.Request:
+        return httpx.Request(
+            "GET",
+            self.config.registry.registry_url(self.image.repository, "tags", "list"),
+            headers=self.config.registry.headers(),
+        )
 
-    def execute(self, config: PipelineConfig) -> None:
+    def execute(self, client: docker.DockerClient | None = None) -> None:
         self.git.configure(self.git.path)
-        client = config.registry.create_client()
+        config = self.config
+        client = client if client is not None else config.registry.create_client()
         path = self.git.path
 
         image, rest = client.images.build(
@@ -258,12 +275,12 @@ class Builder(BaseYAML):
             target=self.git.dockertarget,
             pull=True,
         )
-        print(rest)
 
         for tag in self.image_tags:
             image.tag(tag)
-            if self.options.push:
-                client.images.push(self.image.repository, tag=tag)
+
+        if self.image.push:
+            client.images.push(self.image.repository)
 
 
 # NOTE: Supports multiple files since it will be convenient to keep partial
@@ -275,62 +292,83 @@ class BuilderCommand:
     def ci(cls, context: typer.Context, repository_url: str):
         """This function assumes that images are published via github."""
 
-        # GET FROM ARBITRARY BRANCH BECAUSE WE NEED ATLEAST THE CLONE INFO.
-        # https://raw.githubusercontent.com/acederberg/captura/master/pyproject.toml
-
         context_data: flags.ContextData = context.obj
         matched = PATTERN_GITHUB.match(repository_url)
         if matched is None:
-            console.print(f"[red]Could not match `{repository_url}`.")
+            CONSOLE.print(f"[red]Could not match `{repository_url}`.")
             raise typer.Exit(1)
 
         slug = matched.group("slug")
-        rawurl = f"https://raw.githubusercontent.com/{slug}/{BUILDFILE}"
+        url = f"https://raw.githubusercontent.com/{slug}/{BUILDFILE}"
 
         try:
-            build_info = Builder.fromYAML(context_data.config, rawurl)
+            builder = Builder.fromBuilderFile(context_data.config, url=url)
         except ValueError as err:
-            console.print("[red]" + str(err))
+            CONSOLE.print("[red]" + str(err))
             raise typer.Exit(2)
 
-        build_info.execute(context_data.config)
+        builder.execute()
 
     @classmethod
-    def build(cls, context: typer.Context, files: flags.FlagFile):
+    def list_pushed(cls, context: typer.Context, file: flags.FlagFile):
 
         context_data: flags.ContextData = context.obj
 
-        build_info = Builder.fromYAML(*files, config=context_data.config)
-        build_info.execute(context_data.config)
+        builder = Builder.fromBuilderFile(context_data.config, path=file)
+
+        with httpx.Client() as client:
+            req = client.send(builder.req_list_tags())
+            data, err = util.check(req)
+            if err is not None:
+                raise err
+
+        util.print_yaml(data)
+
+    @classmethod
+    def list_catalog(cls, context: typer.Context):
+        context_data: flags.ContextData = context.obj
+
+        with httpx.Client() as client:
+            req = client.send(context_data.config.registry.req_catalog())
+            data, err = util.check(req)
+            if err is not None:
+                raise err
+
+        util.print_yaml(data)
+
+    @classmethod
+    def build(cls, context: typer.Context, file: flags.FlagFile):
+
+        context_data: flags.ContextData = context.obj
+
+        builder = Builder.fromBuilderFile(context_data.config, path=file)
+        builder.execute()
 
     @classmethod
     def hydrate(
         cls,
         context: typer.Context,
-        files: flags.FlagFile,
-        raw: bool = False,
+        path: flags.FlagFile,
     ):
 
         context_data: flags.ContextData = context.obj
 
-        build_info = Builder.fromYAML(*files, config=context_data.config)
-        build_info.git.configure(build_info.git.path)
+        builder = Builder.fromBuilderFile(context_data.config, path=path)
+        builder.git.configure(builder.git.path)
 
         exclude = set()
         if not all:
             exclude = {"config"}
-        rendered = build_info.model_dump(mode="json", exclude=exclude)
-        rendered = yaml.dump(rendered)
+        rendered = yaml.dump(builder.model_dump(mode="json", exclude=exclude))
+        rendered = f"---\n# Rendered from `{path}`\n" + rendered
 
-        rendered = f"---\n# Rendered from `{files}`\n\n" + rendered
-        if not raw:
-            console = Console()
-            console.print(Syntax(rendered, "yaml", background_color="default"))
-            return
+        util.print_yaml(rendered, is_dumped=True)
 
     @classmethod
     def create_typer(cls):
         cli = typer.Typer()
         cli.command("build")(BuilderCommand.build)
+        cli.command("list")(BuilderCommand.list_catalog)
+        cli.command("pushed")(BuilderCommand.list_pushed)
         cli.command("hydrate")(BuilderCommand.hydrate)
         return cli

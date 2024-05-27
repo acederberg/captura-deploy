@@ -4,14 +4,19 @@
 import enum
 import os
 from collections.abc import Sequence
+from json import JSONDecodeError
 from os import path as p
-from typing import Any, Dict, Self, Set
+from typing import Any, Dict, Self, Set, Tuple
 
+import httpx
 import yaml
 from jsonpath_ng import parse
 from pydantic import BaseModel
 from pydantic.v1.utils import deep_update
+from rich.console import Console
+from rich.syntax import Syntax
 
+CONSOLE = Console()
 DOMAIN: str = "acederberg.io"
 PATH_BASE: str = p.realpath(p.join(p.dirname(__file__), "..", ".."))
 PATH_CONFIGS: str = p.realpath(p.join("configs"))
@@ -45,6 +50,38 @@ class path:
     @staticmethod
     def config(*segments: str) -> str:
         return p.join(PATH_CONFIGS, *segments)
+
+
+def params(**kwargs) -> Dict[str, Any]:
+    return {k: v for k, v in kwargs.items() if v is not None}
+
+
+def check(
+    res: httpx.Response, *, status_code: int = 200
+) -> Tuple[Any, AssertionError | None]:
+    try:
+        data = res.json()
+    except JSONDecodeError as err:
+        data = res.content.decode().strip()
+
+    err = None
+    if res.status_code != status_code:
+        msg = f"Unexpected response from `{res.request.url}`. "
+        msg += "Expected response status code `{}`, got `{}`. Data=`{}`."
+        err = AssertionError(msg.format(res.status_code, status_code, data))
+        return data, err
+
+    return data, err
+
+
+def print_yaml(raw, *, is_dumped: bool = False, syntax: bool = True):
+    rendered = yaml.dump(raw) if not is_dumped else raw
+
+    if syntax:
+        CONSOLE.print(Syntax(rendered, "yaml", background_color="default"))
+        return
+    else:
+        print(rendered)
 
 
 def load(
@@ -91,9 +128,15 @@ class BaseYAML(BaseModel):
     # NOTE: When this is added to pydantic yaml settings I'd like to make paths
     #       into YamlFileConfigDict.
     @classmethod
-    def fromYAML(cls, *paths: str, subpath: str | None = None, **overwrite) -> Self:
+    def fromYAML(
+        cls,
+        *paths: str,
+        subpath: str | None = None,
+        overwrite: Dict[str, Any] | None = None,
+        exclude: Dict[str, Any] | None = None,
+    ) -> Self:
 
-        data = load(*paths, overwrite=overwrite)
+        data = load(*paths, overwrite=overwrite, exclude=exclude)
         if subpath is not None:
             subpath_parsed = parse(subpath)
             data = next(iter(subpath_parsed.find(data)), None)

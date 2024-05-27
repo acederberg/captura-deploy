@@ -5,11 +5,10 @@ git:
   repository: https://github.com/acederberg/captura-pipelines.git
   branch: master
   dockerfile: docker/dockerfile
-  dockertarget: pipelines
+  dockertarget: pipeline
   pull: False
 image:
   target: pipelines
   repository: pipelines
-  tags: ["ci", "pipelines"]
-  push: False
+  push: True
 

@@ -8,7 +8,7 @@ from pydantic import BaseModel
 # --------------------------------------------------------------------------- #
 from captura_pipelines.config import PipelineConfig
 
-FlagFile = Annotated[List[str], typer.Option("-f", "--file")]
+FlagFile = Annotated[str, typer.Option("-f", "--file")]
 FlagConfig = Annotated[Optional[str], typer.Option("--config")]
 
 
