@@ -31,7 +31,11 @@ def validate_registry(v):
 class RegistryConfig(BaseYAML):
     username: Annotated[str, Field()]
     password: Annotated[str, Field()]
-    registry: Annotated[str, Field(), BeforeValidator(validate_registry)]
+    registry: Annotated[
+        None | str,
+        Field(description="`None` indicates dockerhub."),
+        BeforeValidator(validate_registry),
+    ]
 
     def create_client(self) -> docker.DockerClient:
         client = docker.from_env()

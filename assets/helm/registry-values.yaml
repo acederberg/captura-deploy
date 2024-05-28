@@ -13,9 +13,9 @@ image:
   repository: registry
   tag: 2
 
-# configData:
-#   log:
-#     level: debug
+configData:
+  log:
+    level: debug
 
 # NOTE: For debugging.
 # secrets:

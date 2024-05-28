@@ -258,7 +258,9 @@ def create_registry(
                 "bucket": label,
             },
         },
-        overwrite=dict(configData=dict(http=dict(host=host))),
+        overwrite=dict(
+            configData=dict(http=dict(relativeurls=True, host=f"https://{host}"))
+        ),
     )
     # Console().print_json(json.dumps(registry_values, default=str))
     # assert False

@@ -39,7 +39,7 @@ def create_cluster_firewall_device(
     pools: Output[Sequence[linode.LkeNodePool]],
     id_firewall: int,
 ):
-    """Add pool nodes to the firewal"."""
+    """Add pool nodes to the firewal."""
     tuple(
         map(
             lambda node: linode.FirewallDevice(

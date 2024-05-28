@@ -12,6 +12,16 @@ services:
       REGISTRY_AUTH: htpasswd
       REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
       REGISTRY_AUTH_HTPASSWD_REALM: Registry Realm
+
+      REGISTRY_STORAGE: 's3'
+      REGISTRY_STORAGE_S3_ACCESSKEY: 
+      REGISTRY_STORAGE_S3_SECRETKEY: 
+      REGISTRY_STORAGE_S3_BUCKET: captura-object-storage
+      REGISTRY_STORAGE_S3_SECURE: 'true'
+      REGISTRY_STORAGE_S3_REGION: us-lax-1 
+      REGISTRY_STORAGE_S3_REGIONENDPOINT: us-lax-1.linodeobjects.com 
+
+
     volumes:
       # - /path/data:/var/lib/registry
       - ./certs:/certs

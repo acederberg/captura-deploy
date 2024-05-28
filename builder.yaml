@@ -1,11 +1,11 @@
 options:
   tier: base
-  push: True
 git:
   repository: ssh://git@github.com/acederberg/captura-deploy.git
   branch: master
   dockerfile: docker/dockerfile
   dockertarget: pipeline
+  pull: true
 image:
   target: pipeline
   repository: pipeline

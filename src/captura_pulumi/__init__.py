@@ -15,7 +15,6 @@ def create_captura():
 
     # Create cluster an buckets.
     cluster, _ = linode.create_cluster(config)
-    bucket, bucket_key = linode.create_bucket(config)
 
     # Create traefik.
 
@@ -26,20 +25,23 @@ def create_captura():
         .apply(lambda _: k8s.create_traefik_ingressroutes(config))
     )
 
-    pulumi.Output.all(
-        traefik,
-        bucket_key.access_key,
-        bucket_key.secret_key,
-        bucket.cluster,
-        bucket.endpoint,
-        bucket.label,
-    ).apply(
-        lambda data: k8s.create_registry(
-            config,
-            access_key=data[1],
-            secret_key=data[2],
-            cluster=data[3],
-            endpoint=data[4],
-            label=data[5],
+    # NOTE: Because stupid object storage sucks or I suck at using it.
+    if config.require_bool("registry") is True:
+        bucket, bucket_key = linode.create_bucket(config)
+        pulumi.Output.all(
+            traefik,
+            bucket_key.access_key,
+            bucket_key.secret_key,
+            bucket.cluster,
+            bucket.endpoint,
+            bucket.label,
+        ).apply(
+            lambda data: k8s.create_registry(
+                config,
+                access_key=data[1],
+                secret_key=data[2],
+                cluster=data[3],
+                endpoint=data[4],
+                label=data[5],
+            )
         )
-    )

@@ -143,7 +143,6 @@ class BuilderGit(BaseYAML):
 
     @classmethod
     def ensure(cls, repository: str, path: str) -> git.Repo:
-        print(util.p.abspath(path))
         repo = (
             git.Repo.clone_from(repository, to_path=path)
             if path is None or not util.p.exists(path)
@@ -161,6 +160,9 @@ class BuilderGit(BaseYAML):
         if (branch := getattr(repo.heads, self.branch, None)) is None:
             msg = f"No such branch `{self.branch}` of `{self.repository}`."
             raise ValueError(msg)
+
+        if self.pull:
+            repo.remotes["origin"].pull()
 
         if self.commit is not None:
             branch.set_commit(self.commit)
@@ -212,7 +214,15 @@ class Builder(BaseYAML):
     @computed_field
     @property
     def image_full(self) -> str:
-        return f"{self.config.registry.registry}/{self.image.repository}"
+        # NOTE: For docker hub. Namespace is always the user name. Otherwise,
+        #       no namespace is added - instead the repository is added.
+        ns_or_registry = (
+            self.config.registry.username
+            if self.config.registry.registry is None
+            else self.config.registry.registry
+        )
+
+        return f"{ns_or_registry}/{self.image.repository}"
 
     @computed_field
     @property
