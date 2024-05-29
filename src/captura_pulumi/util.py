@@ -2,6 +2,8 @@
 
 # =========================================================================== #
 import enum
+import logging
+import logging.config
 import os
 from collections.abc import Sequence
 from json import JSONDecodeError
@@ -52,6 +54,9 @@ class path:
         return p.join(PATH_CONFIGS, *segments)
 
 
+PATH_CONFIG_LOG = path.base("logging.yaml")
+
+
 def params(**kwargs) -> Dict[str, Any]:
     return {k: v for k, v in kwargs.items() if v is not None}
 
@@ -89,9 +94,6 @@ def load(
     overwrite: Dict[str, Any] | None = None,
     exclude: Dict[str, Any] | Set[str] | None = None,
 ):
-    if not len(paths):
-        raise ValueError()
-
     files = tuple(open(path, "r") for path in paths)
 
     try:
@@ -166,6 +168,23 @@ def create_labels(
 ):
     tags = {"tier": tier.value, "component": component.value, "from": from_, **extra}
     return {f"{domain}/{field}": value for field, value in tags.items()}
+
+
+def setup_logging(config_path: str = PATH_CONFIG_LOG):
+    with open(config_path, "r") as file:
+        config = yaml.safe_load(file)
+
+    logging.config.dictConfig(config)
+
+    return config, logging.getLogger
+
+
+DEFAULT_LOGGING_CONFIG, _get_logger = setup_logging()
+
+
+def get_logger(name: str) -> logging.Logger:
+    ll = _get_logger(name)
+    return ll
 
 
 if __name__ == "__main__":

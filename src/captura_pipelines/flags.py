@@ -8,8 +8,13 @@ from pydantic import BaseModel
 # --------------------------------------------------------------------------- #
 from captura_pipelines.config import PipelineConfig
 
-FlagFile = Annotated[str, typer.Option("-f", "--file")]
+FlagFile = Annotated[Optional[str], typer.Option("-f", "--file")]
 FlagConfig = Annotated[Optional[str], typer.Option("--config")]
+FlagRepository = Annotated[
+    str,
+    typer.Argument(help="Link to the github repository."),
+]
+FlagBranch = Annotated[str, typer.Option()]
 
 
 class ContextData(BaseModel):

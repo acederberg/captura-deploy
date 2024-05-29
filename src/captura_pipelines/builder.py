@@ -1,5 +1,10 @@
 """Docker image build and deploy.
 
+Unfortunately the awful builtkit issues still persist in the docker python 
+library. 
+
+I'd like to move on for now and come back here later.
+
 This exists because I do not want to write a build and deploy step in multiple 
 pipelines (since I will likely need a front end of some sort which will exist 
 in a separate repository or specify another docker image.
@@ -38,7 +43,7 @@ a docker image.
 
 # =========================================================================== #
 import re
-from typing import Annotated, Dict, Literal, Self, Set
+from typing import Annotated, Any, Dict, Generator, Literal, Self, Set
 
 import docker
 import git
@@ -64,12 +69,14 @@ from captura_pulumi import util
 from captura_pulumi.porkbun import CONSOLE
 from captura_pulumi.util import BaseYAML
 
-BUILDFILE = "build.yaml"
+BUILDFILE = "builder.yaml"
 PATTERN_GITHUB = re.compile(
     "(?P<scheme>https|ssh)://(?P<auth>(?P<auth_username>[a-zA-Z0-9]+):?(?P<auth_password>.+)?@)?github.com/(?P<slug>(?P<username>[a-zA-Z0-9_-]+)/(?P<repository>[a-zA-Z0-9_-]+))(?P<dotgit>\\.git)?(?P<path>/.*)?"
 )
 LABEL_FROM = "builder"
 PATH_CLONE = util.path.base(".builder")
+
+logger = util.get_logger(__name__)
 
 
 class BuilderImage(BaseYAML):
@@ -89,7 +96,7 @@ class BuilderGit(BaseYAML):
     # Must be provided.
     repository: Annotated[str, Field()]
     path: Annotated[str, Field()]
-    pull: Annotated[bool, Field(default=False)]
+    pull: Annotated[bool, Field(default=True)]
 
     branch: Annotated[str, Field()]
     tag: Annotated[
@@ -150,9 +157,10 @@ class BuilderGit(BaseYAML):
         )
         return repo
 
-    def configure(self, path: str):
+    def configure(self):
+        path = self.path
         if util.p.exists(path) and not util.p.isdir(path):
-            raise ValueError(f"Clone path `{path}` must be a file.")
+            raise ValueError(f"Clone path `{path}` must be a directory.")
 
         repo = self.ensure(self.repository, path)
 
@@ -182,6 +190,7 @@ class Builder(BaseYAML):
     git: BuilderGit
     image: BuilderImage
     options: BuilderOptions
+    origin: Annotated[None | str, Field(default=None)]
 
     @classmethod
     def fromBuilderFile(
@@ -192,6 +201,7 @@ class Builder(BaseYAML):
         path: str | None = None,
     ) -> Self:
 
+        logger.debug("Creating builder instance from build file.")
         if url is not None and path is not None:
             raise ValueError()
         elif url is None and path is None:
@@ -273,59 +283,114 @@ class Builder(BaseYAML):
             headers=self.config.registry.headers(),
         )
 
-    def execute(self, client: docker.DockerClient | None = None) -> None:
-        self.git.configure(self.git.path)
+    def execute(self, client: docker.DockerClient) -> Generator[Any, None, None]:
+        logger.debug("Building `%s`.", self.image_tags)
         config = self.config
         client = client if client is not None else config.registry.create_client()
+        yield from self.build(client)
+        self.push(client)
+
+    def build(self, client: docker.DockerClient) -> Generator[Any, None, None]:
+        self.git.configure()
         path = self.git.path
 
-        image, rest = client.images.build(
+        tags = self.image_tags.copy()
+        tag = tags.pop()
+
+        logger.debug("Building...")
+        yield from client.api.build(
             path=path,
             dockerfile=self.git.dockerfile,
             target=self.git.dockertarget,
+            tag=tag,
             pull=True,
+            # decode=True,
         )
 
-        for tag in self.image_tags:
+        image = client.images.get(tag)
+        logger.debug("Tagging...")
+        for tag in tags:
             image.tag(tag)
 
+    def push(self, client: docker.DockerClient) -> None:
+        logger.info("Pushing `%s`.", self.image_tags)
         if self.image.push:
             client.images.push(self.image.repository)
 
-
-# NOTE: Supports multiple files since it will be convenient to keep partial
-#       build info YAML in repositories. When the repo is cloned, it should
-#       specify ``build-info.yaml`` and ``build-info.test.yaml``.
-class BuilderCommand:
-
     @classmethod
-    def ci(cls, context: typer.Context, repository_url: str):
+    def fromRepo(
+        cls, config: PipelineConfig, repository_url: str, branch: str = "master"
+    ) -> Self:
         """This function assumes that images are published via github."""
 
-        context_data: flags.ContextData = context.obj
+        logger.debug("Getting `%s` -> `%s` -> `builder.yaml`.", repository_url, branch)
         matched = PATTERN_GITHUB.match(repository_url)
         if matched is None:
-            CONSOLE.print(f"[red]Could not match `{repository_url}`.")
-            raise typer.Exit(1)
+            raise ValueError(f"[red]Could not match `{repository_url}`.")
 
         slug = matched.group("slug")
-        url = f"https://raw.githubusercontent.com/{slug}/{BUILDFILE}"
+        url = f"https://raw.githubusercontent.com/{slug}/{branch}/{BUILDFILE}"
 
-        try:
-            builder = Builder.fromBuilderFile(context_data.config, url=url)
-        except ValueError as err:
-            CONSOLE.print("[red]" + str(err))
-            raise typer.Exit(2)
-
-        builder.execute()
+        builder = Builder.fromBuilderFile(config, url=url)
+        return builder  # type: ignore
 
     @classmethod
-    def list_pushed(cls, context: typer.Context, file: flags.FlagFile):
+    def forTyper(
+        cls,
+        context: typer.Context,
+        repository_url: str,
+        branch: str = "master",
+    ) -> Self:
+        try:
+            builder = cls.fromRepo(context.obj.config, repository_url, branch)
+        except ValueError as err:
+            CONSOLE.print("[red]" + str(err))
+            raise typer.Exit(1)
 
-        context_data: flags.ContextData = context.obj
+        return builder
 
-        builder = Builder.fromBuilderFile(context_data.config, path=file)
 
+class BuilderCommandCI:
+    @classmethod
+    def push(
+        cls,
+        context: typer.Context,
+        repository_url: flags.FlagRepository,
+        branch: flags.FlagBranch = "master",
+    ):
+        builder = Builder.forTyper(context, repository_url, branch)
+        builder.push(builder.config.registry.create_client())
+
+    @classmethod
+    def build(
+        cls,
+        context: typer.Context,
+        repository_url: flags.FlagRepository,
+        branch: flags.FlagBranch = "master",
+    ):
+        builder = Builder.forTyper(context, repository_url, branch)
+        for line in builder.build(builder.config.registry.create_client()):
+            CONSOLE.print(line)
+
+    @classmethod
+    def initialize(
+        cls,
+        context: typer.Context,
+        repository_url: flags.FlagRepository,
+        branch: flags.FlagBranch = "master",
+    ):
+        builder = Builder.forTyper(context, repository_url, branch)
+        builder.git.configure()
+
+    @classmethod
+    def list(
+        cls,
+        context: typer.Context,
+        repository_url: flags.FlagRepository,
+        branch: flags.FlagBranch = "master",
+    ):
+
+        builder = Builder.forTyper(context, repository_url, branch)
         with httpx.Client() as client:
             req = client.send(builder.req_list_tags())
             data, err = util.check(req)
@@ -333,6 +398,37 @@ class BuilderCommand:
                 raise err
 
         util.print_yaml(data)
+
+    @classmethod
+    def hydrate(
+        cls,
+        context: typer.Context,
+        repository_url: flags.FlagRepository,
+        branch: flags.FlagBranch = "master",
+    ):
+
+        builder = Builder.forTyper(context, repository_url, branch)
+        builder.git.configure()
+        rendered = yaml.dump(builder.model_dump(mode="json"))
+        rendered = f"---\n# Rendered from `{builder.origin}`\n" + rendered
+
+        util.print_yaml(rendered, is_dumped=True)
+
+    @classmethod
+    def create_typer(cls):
+        cli = typer.Typer()
+        cli.command("hydrate")(cls.hydrate)
+        cli.command("build")(cls.build)
+        cli.command("ci")(cls.push)
+        cli.command("ls")(cls.list)
+        cli.command("initialize")(cls.initialize)
+        return cli
+
+
+# NOTE: Supports multiple files since it will be convenient to keep partial
+#       build info YAML in repositories. When the repo is cloned, it should
+#       specify ``build-info.yaml`` and ``build-info.test.yaml``.
+class BuilderCommand:
 
     @classmethod
     def list_catalog(cls, context: typer.Context):
@@ -347,38 +443,9 @@ class BuilderCommand:
         util.print_yaml(data)
 
     @classmethod
-    def build(cls, context: typer.Context, file: flags.FlagFile):
-
-        context_data: flags.ContextData = context.obj
-
-        builder = Builder.fromBuilderFile(context_data.config, path=file)
-        builder.execute()
-
-    @classmethod
-    def hydrate(
-        cls,
-        context: typer.Context,
-        path: flags.FlagFile,
-    ):
-
-        context_data: flags.ContextData = context.obj
-
-        builder = Builder.fromBuilderFile(context_data.config, path=path)
-        builder.git.configure(builder.git.path)
-
-        exclude = set()
-        if not all:
-            exclude = {"config"}
-        rendered = yaml.dump(builder.model_dump(mode="json", exclude=exclude))
-        rendered = f"---\n# Rendered from `{path}`\n" + rendered
-
-        util.print_yaml(rendered, is_dumped=True)
-
-    @classmethod
     def create_typer(cls):
         cli = typer.Typer()
-        cli.command("build")(BuilderCommand.build)
-        cli.command("list")(BuilderCommand.list_catalog)
-        cli.command("pushed")(BuilderCommand.list_pushed)
-        cli.command("hydrate")(BuilderCommand.hydrate)
+        cli.command("list")(cls.list_catalog)
+        cli.add_typer(BuilderCommandCI.create_typer(), name="ci")
+
         return cli
