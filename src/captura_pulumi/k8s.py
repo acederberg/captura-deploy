@@ -528,3 +528,27 @@ def create_traefik_ingressroutes(config: pulumi.Config):
                 "tls": {"certResolver": "letsencrypt"},
             },
         )
+
+# WARNING: Uninstalling the operator is a huge pain in the ass.
+
+# MYSQL_NAMESPACE = "mysql"
+#
+#
+# def create_mysql(config: pulumi.Config):
+#
+#     mysql_values = util.load(
+#         util.path.asset("helm/mysql.yaml"),
+#         exclude=dict(
+#         ),
+#     )
+#     k8s.helm.v3.Chart(
+#         "mysql",
+#         k8s.helm.v3.ChartOpts(
+#             chart="mysql",
+#             fetch_opts=k8s.helm.v3.FetchOpts(
+#                 repo="https://mysql.github.io/mysql-operator"
+#             ),
+#             namespace=MYSQL_NAMESPACE,
+#             values=mysql_values,
+#         ),
+#     )
