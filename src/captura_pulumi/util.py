@@ -8,7 +8,7 @@ import os
 from collections.abc import Sequence
 from json import JSONDecodeError
 from os import path as p
-from typing import Any, Dict, Self, Set, Tuple
+from typing import Any, Dict, List, Self, Set, Tuple
 
 import httpx
 import yaml
@@ -91,16 +91,22 @@ def print_yaml(raw, *, is_dumped: bool = False, syntax: bool = True):
 
 def load(
     *paths: str,
+    loaded: List[Dict[str, Any]] | None = None,
     overwrite: Dict[str, Any] | None = None,
     exclude: Dict[str, Any] | Set[str] | None = None,
 ):
     files = tuple(open(path, "r") for path in paths)
 
     try:
-        loaded = list(yaml.safe_load(file) for file in files)
+        loaded_ = list(yaml.safe_load(file) for file in files)
     except Exception as err:
         tuple(file.close() for file in files)
         raise err
+
+    if loaded is not None:
+        loaded += loaded_
+    else:
+        loaded = loaded_
 
     if overwrite is not None:
         loaded.append(overwrite)
@@ -133,12 +139,13 @@ class BaseYAML(BaseModel):
     def fromYAML(
         cls,
         *paths: str,
+        loaded: List[Dict[str, Any]] | None = None,
         subpath: str | None = None,
         overwrite: Dict[str, Any] | None = None,
         exclude: Dict[str, Any] | None = None,
     ) -> Self:
 
-        data = load(*paths, overwrite=overwrite, exclude=exclude)
+        data = load(*paths, loaded=loaded, overwrite=overwrite, exclude=exclude)
         if subpath is not None:
             subpath_parsed = parse(subpath)
             data = next(iter(subpath_parsed.find(data)), None)

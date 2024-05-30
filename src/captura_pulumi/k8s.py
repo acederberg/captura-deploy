@@ -529,6 +529,7 @@ def create_traefik_ingressroutes(config: pulumi.Config):
             },
         )
 
+
 # WARNING: Uninstalling the operator is a huge pain in the ass.
 
 # MYSQL_NAMESPACE = "mysql"
@@ -552,3 +553,29 @@ def create_traefik_ingressroutes(config: pulumi.Config):
 #             values=mysql_values,
 #         ),
 #     )
+
+CAPTURA_NAMESPACE = "captura"
+
+
+def create_captura(config: pulumi.Config):
+
+    k8s.core.v1.Namespace(
+        CAPTURA_NAMESPACE,
+        metadata=create_metadata(
+            "captura",
+            CAPTURA_NAMESPACE,
+        ),
+    )
+    k8s.core.v1.Secret(
+        "captura-secret",
+        metadata=create_metadata(
+            "captura-app-config",
+            CAPTURA_NAMESPACE,
+        ),
+        data=util.load(util.path.config("app.prod.yaml")),
+    )
+    # k8s.apps.v1.Deployment(
+    #     "captura-deployment",
+    #     metadata=create_metadata("captura-app-config", CAPTURA_NAMESPACE),
+    #     ...
+    # )

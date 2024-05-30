@@ -43,7 +43,11 @@ a docker image.
 
 # =========================================================================== #
 import re
-from typing import Annotated, Any, Dict, Generator, Literal, Self, Set
+import selectors
+import subprocess
+import sys
+from datetime import datetime
+from typing import Annotated, Any, Callable, Dict, Generator, Literal, Self, Set
 
 import docker
 import git
@@ -122,7 +126,7 @@ class BuilderGit(BaseYAML):
     dockerfile: Annotated[
         str | None,
         Field(
-            description="Name of the dockerfile in ``dockerdir``.",
+            description="Path of dockerfile relative to project root.",
             default="dockerfile",
         ),
     ]
@@ -199,13 +203,17 @@ class Builder(BaseYAML):
         *,
         url: str | None = None,
         path: str | None = None,
+        overwrite: Dict[str, Any] | None = None,
     ) -> Self:
+        """Create an instance given a path or url to yaml specifying an
+        instance.
+        """
 
         logger.debug("Creating builder instance from build file.")
-        if url is not None and path is not None:
-            raise ValueError()
-        elif url is None and path is None:
-            raise ValueError()
+        if (url is not None and path is not None) or (url is None and path is None):
+            raise ValueError("Exactly one of `url` and `path` should be specified.")
+
+        exclude = dict(config=config)
 
         # NOTE: Look for build info instead of cloning and expecting it.
         if url is not None:
@@ -213,13 +221,58 @@ class Builder(BaseYAML):
             if res.status_code != 200:
                 msg = f"Could not find build info at `{url}`."
                 raise ValueError(msg)
-            return cls.fromYAML(
-                overwrite=yaml.safe_load(res.content),
-                exclude={"config": config},
-            )
+
+            content = yaml.safe_load(res.content)
+            return cls.fromYAML(loaded=[content], overwrite=overwrite, exclude=exclude)
         else:
             assert path is not None
-            return cls.fromYAML(path, exclude={"config": config})
+            return cls.fromYAML(path, overwrite=overwrite, exclude=exclude)
+
+    @classmethod
+    def fromRepo(
+        cls,
+        config: PipelineConfig,
+        repository_url: str,
+        branch: str = "master",
+        overwrite: Dict[str, Any] | None = None,
+    ) -> Self:
+        """This function assumes that images are published via github."""
+
+        logger.debug("Getting `%s` -> `%s` -> `builder.yaml`.", repository_url, branch)
+        matched = PATTERN_GITHUB.match(repository_url)
+        if matched is None:
+            raise ValueError(f"[red]Could not match `{repository_url}`.")
+
+        slug = matched.group("slug")
+        url = f"https://raw.githubusercontent.com/{slug}/{branch}/{BUILDFILE}"
+
+        builder = Builder.fromBuilderFile(config, url=url, overwrite=overwrite)
+        return builder  # type: ignore
+
+    @classmethod
+    def forTyper(
+        cls,
+        context: typer.Context,
+        git_repository_url: flags.FlagGitRepository,
+        git_branch: flags.FlagBranch = "master",
+        git_tag: flags.FlagGitTag = None,
+        git_commit: flags.FlagGitCommit = None,
+    ) -> Self:
+
+        overwrite = dict(tag=git_tag, commit=git_commit)
+        overwrite = {k: v for k, v in overwrite.items() if v is not None}
+        try:
+            builder = cls.fromRepo(
+                context.obj.config,
+                git_repository_url,
+                git_branch,
+                overwrite=dict(git=overwrite),
+            )
+        except ValueError as err:
+            CONSOLE.print("[reGid]" + str(err))
+            raise typer.Exit(1)
+
+        return builder
 
     @computed_field
     @property
@@ -290,64 +343,68 @@ class Builder(BaseYAML):
         yield from self.build(client)
         self.push(client)
 
-    def build(self, client: docker.DockerClient) -> Generator[Any, None, None]:
+    def build(
+        self,
+        client: docker.DockerClient,
+        callback: Callable[[Any, Any], Any],
+        handle_exit: Callable[[int], Exception] | None = None,
+    ) -> Generator[Any, None, None]:
         self.git.configure()
-        path = self.git.path
 
         tags = self.image_tags.copy()
         tag = tags.pop()
 
-        logger.debug("Building...")
-        yield from client.api.build(
-            path=path,
-            dockerfile=self.git.dockerfile,
-            target=self.git.dockertarget,
-            tag=tag,
-            pull=True,
-            # decode=True,
-        )
+        # ------------------------------------------------------------------- #
+        # NOTE: Because library does not support modern builds.
+
+        cmd = ["docker", "build"]
+        if self.git.dockertarget is not None:
+            cmd += ("--target", self.git.dockertarget)
+        if self.git.dockerfile is not None:
+            cmd += ("--file", util.p.join(self.git.path, self.git.dockerfile))
+
+        cmd += ("--tag", tag)
+        cmd.append(self.git.path)
+
+        logger.debug("Building with command `%s`.", cmd)
+        with subprocess.Popen(cmd, stdout=subprocess.PIPE) as process:
+            assert process.stdout is not None
+
+            selector = selectors.DefaultSelector()
+            selector.register(process.stdout, selectors.EVENT_READ, callback)
+
+            while process.poll() is None:
+                events = selector.select()
+                for key, mask in events:
+                    fn = key.data
+                    yield fn(key.fileobj, mask)
+
+            exit_code = process.wait()
+
+        if exit_code:
+            err = (
+                ValueError(f"Build exitted with code `{exit_code}`.")
+                if handle_exit is None
+                else handle_exit(exit_code)
+            )
+            raise err
+
+        # ------------------------------------------------------------------- #
 
         image = client.images.get(tag)
-        logger.debug("Tagging...")
         for tag in tags:
+            logger.debug("Tagging with `%s`.", tag)
             image.tag(tag)
 
     def push(self, client: docker.DockerClient) -> None:
+        if not self.image.push:
+            return
+
         logger.info("Pushing `%s`.", self.image_tags)
-        if self.image.push:
-            client.images.push(self.image.repository)
-
-    @classmethod
-    def fromRepo(
-        cls, config: PipelineConfig, repository_url: str, branch: str = "master"
-    ) -> Self:
-        """This function assumes that images are published via github."""
-
-        logger.debug("Getting `%s` -> `%s` -> `builder.yaml`.", repository_url, branch)
-        matched = PATTERN_GITHUB.match(repository_url)
-        if matched is None:
-            raise ValueError(f"[red]Could not match `{repository_url}`.")
-
-        slug = matched.group("slug")
-        url = f"https://raw.githubusercontent.com/{slug}/{branch}/{BUILDFILE}"
-
-        builder = Builder.fromBuilderFile(config, url=url)
-        return builder  # type: ignore
-
-    @classmethod
-    def forTyper(
-        cls,
-        context: typer.Context,
-        repository_url: str,
-        branch: str = "master",
-    ) -> Self:
-        try:
-            builder = cls.fromRepo(context.obj.config, repository_url, branch)
-        except ValueError as err:
-            CONSOLE.print("[red]" + str(err))
-            raise typer.Exit(1)
-
-        return builder
+        for tag in self.image_tags:
+            logger.debug("Pushing tag `%s`.", tag)
+            image_full, tag = tag.split(":")
+            client.images.push(image_full, tag=tag)
 
 
 class BuilderCommandCI:
@@ -355,28 +412,65 @@ class BuilderCommandCI:
     def push(
         cls,
         context: typer.Context,
-        repository_url: flags.FlagRepository,
+        repository_url: flags.FlagGitRepository,
         branch: flags.FlagBranch = "master",
+        git_tag: flags.FlagGitTag = None,
+        git_commit: flags.FlagGitCommit = None,
     ):
-        builder = Builder.forTyper(context, repository_url, branch)
+        builder = Builder.forTyper(
+            context,
+            repository_url,
+            branch,
+            git_tag=git_tag,
+            git_commit=git_commit,
+        )
+        builder.image.push = True
+
         builder.push(builder.config.registry.create_client())
 
     @classmethod
     def build(
         cls,
         context: typer.Context,
-        repository_url: flags.FlagRepository,
+        repository_url: flags.FlagGitRepository,
         branch: flags.FlagBranch = "master",
+        git_tag: flags.FlagGitTag = None,
+        git_commit: flags.FlagGitCommit = None,
     ):
-        builder = Builder.forTyper(context, repository_url, branch)
-        for line in builder.build(builder.config.registry.create_client()):
-            CONSOLE.print(line)
+        builder = Builder.forTyper(
+            context,
+            repository_url,
+            branch,
+            git_tag=git_tag,
+            git_commit=git_commit,
+        )
+
+        # NOTE: See https://stackoverflow.com/questions/18421757/live-output-from-subprocess-command
+        ts = datetime.now().isoformat(sep="-")
+        logfile_path = util.path.logs(f"docker-build-{builder.origin}-{ts}.log")
+
+        def handle_exit(exit_code: int):
+            CONSOLE.print(f"[red]Build failed with exit code `{exit_code}`.")
+            return typer.Exit(exit_code)
+
+        with open(logfile_path, "w") as logfile:
+            for item in builder.build(
+                builder.config.registry.create_client(),
+                lambda stream, mask: tuple(
+                    buffer.write(chunk)
+                    for buffer in (sys.stdout.buffer, logfile.buffer)
+                    for chunk in (stream.readline(),)
+                    if chunk is not None
+                ),
+                handle_exit=handle_exit,
+            ):
+                ...
 
     @classmethod
     def initialize(
         cls,
         context: typer.Context,
-        repository_url: flags.FlagRepository,
+        repository_url: flags.FlagGitRepository,
         branch: flags.FlagBranch = "master",
     ):
         builder = Builder.forTyper(context, repository_url, branch)
@@ -386,7 +480,7 @@ class BuilderCommandCI:
     def list(
         cls,
         context: typer.Context,
-        repository_url: flags.FlagRepository,
+        repository_url: flags.FlagGitRepository,
         branch: flags.FlagBranch = "master",
     ):
 
@@ -403,11 +497,19 @@ class BuilderCommandCI:
     def hydrate(
         cls,
         context: typer.Context,
-        repository_url: flags.FlagRepository,
+        repository_url: flags.FlagGitRepository,
         branch: flags.FlagBranch = "master",
+        git_tag: flags.FlagGitTag = None,
+        git_commit: flags.FlagGitCommit = None,
     ):
 
-        builder = Builder.forTyper(context, repository_url, branch)
+        builder = Builder.forTyper(
+            context,
+            repository_url,
+            branch,
+            git_tag,
+            git_commit,
+        )
         builder.git.configure()
         rendered = yaml.dump(builder.model_dump(mode="json"))
         rendered = f"---\n# Rendered from `{builder.origin}`\n" + rendered
@@ -417,6 +519,7 @@ class BuilderCommandCI:
     @classmethod
     def create_typer(cls):
         cli = typer.Typer()
+        cli.command("push")(cls.push)
         cli.command("hydrate")(cls.hydrate)
         cli.command("build")(cls.build)
         cli.command("ci")(cls.push)
