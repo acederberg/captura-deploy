@@ -302,10 +302,13 @@ class Builder(BaseYAML):
            release     -> {Pyproject TOML version}
 
         """
+
         tags = set()
+        print(tags)
         if self.git.commit is not None:
             tags.add(self.git.commit)
 
+        print(tags)
         if self.git.tag:
             version = self.git.tag
             if self.git.branch == "master" or self.git.branch == "main":
@@ -316,6 +319,7 @@ class Builder(BaseYAML):
             tags.add(version)
 
         tags |= self.image.tags
+        print(tags)
         return {f"{self.image_full}:{tag}" for tag in tags}
 
     @computed_field
@@ -424,9 +428,15 @@ class BuilderCommandCI:
             git_tag=git_tag,
             git_commit=git_commit,
         )
+        builder.git.configure()
         builder.image.push = True
 
         builder.push(builder.config.registry.create_client())
+
+        # rendered = yaml.dump(builder.model_dump(mode="json"))
+        # rendered = f"---\n# Rendered from `{builder.origin}`\n" + rendered
+        #
+        # util.print_yaml(rendered, is_dumped=True)
 
     @classmethod
     def build(
@@ -453,10 +463,11 @@ class BuilderCommandCI:
             CONSOLE.print(f"[red]Build failed with exit code `{exit_code}`.")
             return typer.Exit(exit_code)
 
+        builder.git.configure()
         with open(logfile_path, "w") as logfile:
-            for item in builder.build(
+            for _ in builder.build(
                 builder.config.registry.create_client(),
-                lambda stream, mask: tuple(
+                lambda stream, _: tuple(
                     buffer.write(chunk)
                     for buffer in (sys.stdout.buffer, logfile.buffer)
                     for chunk in (stream.readline(),)
@@ -525,6 +536,7 @@ class BuilderCommandCI:
         cli.command("ci")(cls.push)
         cli.command("ls")(cls.list)
         cli.command("initialize")(cls.initialize)
+
         return cli
 
 

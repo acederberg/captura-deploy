@@ -45,6 +45,10 @@ pulumi = [
 pipelines = "captura_pipelines.__main__:main"
 
 
+[tool.setuptools.packages.find]
+where = "src"
+
+
 [tool.black]
 
 

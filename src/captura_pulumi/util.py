@@ -163,6 +163,7 @@ class LabelComponent(str, enum.Enum):
     traefik = "traefik"
     error_pages = "error-pages"
     registry = "registry"
+    captura = "captura"
 
 
 def create_labels(

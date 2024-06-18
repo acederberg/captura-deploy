@@ -2,7 +2,7 @@ import typer
 
 # --------------------------------------------------------------------------- #
 from captura_pipelines import flags
-from captura_pipelines.builder import Builder, BuilderCommand
+from captura_pipelines.builder import BuilderCommand
 
 
 class Command:

@@ -30,7 +30,9 @@ import pulumi
 import pulumi_kubernetes as k8s
 import pulumi_linode as linode
 from pulumi import Config, Output, ResourceOptions, warn
+from pulumi_kubernetes.core.v1 import SecretVolumeSourceArgs
 from pulumi_kubernetes.helm.v3.helm import FetchOpts
+from pulumi_kubernetes.meta.v1 import LabelSelectorArgs
 from rich.console import Console
 
 # --------------------------------------------------------------------------- #
@@ -56,6 +58,13 @@ TRAEFIK_MW_CIRCUIT_BREAKER = "traefik-circuit-breaker"
 REGISTRY_NAMESPACE = "registry"
 REGISTRY_RELEASE = "registry"
 REGISTRY_PORT = 5000
+
+CAPTURA_NAMESPACE = "captura"
+CAPTURA_PORT = 8080
+CAPTURA_PORT_SERVICE = 80
+CAPTURA_TEXT_GIT_SYNC_REPO = "captura-text-portfolio-assets.git"
+CAPTURA_TEXT_GIT_SYNC = "captura-git-sync"
+CAPTURA_TEXT_DOCS = "/home/captura/.captura/acederberg.io"
 
 
 def create_traefik(config: Config) -> k8s.helm.v3.Chart:
@@ -554,28 +563,180 @@ def create_traefik_ingressroutes(config: pulumi.Config):
 #         ),
 #     )
 
-CAPTURA_NAMESPACE = "captura"
-
 
 def create_captura(config: pulumi.Config):
 
-    k8s.core.v1.Namespace(
-        CAPTURA_NAMESPACE,
-        metadata=create_metadata(
-            "captura",
-            CAPTURA_NAMESPACE,
-        ),
+    domain = config.require("domain")
+    labels = util.create_labels(
+        domain,
+        tier=util.LabelTier.api,
+        component=util.LabelComponent.traefik,
+        from_="pulumi",
     )
+    metadata = create_metadata(
+        "captura",
+        CAPTURA_NAMESPACE,
+        labels=labels,
+    )
+
+    # NOTE: Make the secret like
+    # CAPTURA_CONFIG_B64=$( cat ./config/app.prod.yaml | base64 --encode )
+    # pulumi config set --secret captura_config_b64 $CAPTURA_CONFIG_B64
+    captura_config_b64 = config.require_secret("captura_config_b64")
+    text_status_b64 = config.require_secret("captura_text_status_b64")
+    text_config_b64 = config.require_secret("captura_text_config_b64")
+    k8s.core.v1.Namespace(CAPTURA_NAMESPACE, metadata=metadata)
     k8s.core.v1.Secret(
         "captura-secret",
-        metadata=create_metadata(
-            "captura-app-config",
-            CAPTURA_NAMESPACE,
-        ),
-        data=util.load(util.path.config("app.prod.yaml")),
+        metadata=metadata,
+        data={
+            "app.yaml": captura_config_b64,
+            "text.status.yaml": text_status_b64,
+            "text.yaml": text_config_b64,
+        },
     )
-    # k8s.apps.v1.Deployment(
-    #     "captura-deployment",
-    #     metadata=create_metadata("captura-app-config", CAPTURA_NAMESPACE),
-    #     ...
-    # )
+
+    # NOTE: Use an init container to clone in browser content.
+    volume_args = k8s.core.v1.VolumeArgs(
+        name="captura",
+        secret=k8s.core.v1.SecretVolumeSourceArgs(
+            secret_name="captura",
+        ),
+    )
+    volume_args_git_sync = k8s.core.v1.VolumeArgs(
+        name=CAPTURA_TEXT_GIT_SYNC, empty_dir=k8s.core.v1.EmptyDirVolumeSourceArgs()
+    )
+    init_container_args = k8s.core.v1.ContainerArgs(
+        name=CAPTURA_TEXT_GIT_SYNC,
+        image="registry.k8s.io/git-sync/git-sync:v4.2.3",
+        volume_mounts=[
+            k8s.core.v1.VolumeMountArgs(
+                name=CAPTURA_TEXT_GIT_SYNC,
+                mount_path="/git",
+            ),
+        ],
+        args=[
+            f"--repo=https://github.com/acederberg/{CAPTURA_TEXT_GIT_SYNC_REPO}",
+            "--depth=1",
+            "--ref=master",
+            "--root=/git",
+            "--one-time",
+        ],
+    )
+    container_args = k8s.core.v1.ContainerArgs(
+        name="captura",
+        image="acederberg/captura-text:1fcd3595ecbd766dd30cc2aa90f680fc4fb1be7e",
+        image_pull_policy="Always",
+        ports=[k8s.core.v1.ContainerPortArgs(container_port=8080)],
+        env=[
+            k8s.core.v1.EnvVarArgs(
+                name="CAPTURA_TEXT_DOCS",
+                value=CAPTURA_TEXT_DOCS,
+            ),
+        ],
+        volume_mounts=[
+            k8s.core.v1.VolumeMountArgs(
+                name=CAPTURA_TEXT_GIT_SYNC,
+                mount_path=CAPTURA_TEXT_DOCS,
+                sub_path=CAPTURA_TEXT_GIT_SYNC_REPO,
+            ),
+            k8s.core.v1.VolumeMountArgs(
+                name="captura",
+                mount_path="/home/captura/.captura/app.yaml",
+                sub_path="app.yaml",
+            ),
+            k8s.core.v1.VolumeMountArgs(
+                name="captura",
+                mount_path="/home/captura/.captura/text.status.yaml",
+                sub_path="text.status.yaml",
+            ),
+            k8s.core.v1.VolumeMountArgs(
+                name="captura",
+                mount_path="/home/captura/.captura/text.yaml",
+                sub_path="text.yaml",
+            ),
+        ],
+        readiness_probe=k8s.core.v1.ProbeArgs(
+            failure_threshold=3,
+            http_get=k8s.core.v1.HTTPGetActionArgs(
+                path="/",
+                port=CAPTURA_PORT,
+                scheme="HTTP",
+            ),
+            period_seconds=10,
+            success_threshold=1,
+            timeout_seconds=1,
+        ),
+    )
+
+    k8s.apps.v1.Deployment(
+        "captura-deployment",
+        metadata=metadata,
+        spec=k8s.apps.v1.DeploymentSpecArgs(
+            replicas=1,
+            selector=LabelSelectorArgs(match_labels=labels),
+            template=k8s.core.v1.PodTemplateSpecArgs(
+                metadata=k8s.meta.v1.ObjectMetaArgs(**metadata),
+                spec=k8s.core.v1.PodSpecArgs(
+                    init_containers=[init_container_args],
+                    containers=[container_args],
+                    volumes=[volume_args, volume_args_git_sync],
+                ),
+            ),
+        ),
+    )
+
+    service = k8s.core.v1.Service(
+        "captura-service",
+        metadata=metadata,
+        spec=k8s.core.v1.ServiceSpecArgs(
+            type="ClusterIP",
+            selector=labels,
+            ports=[
+                k8s.core.v1.ServicePortArgs(
+                    name="captura",
+                    port=CAPTURA_PORT_SERVICE,
+                    target_port=CAPTURA_PORT,
+                )
+            ],
+        ),
+    )
+
+    host = f"captura.{domain}"
+    routes = [
+        {
+            "kind": "Rule",
+            "match": f"HOST(`{host}`)",
+            "middlewares": [
+                {
+                    "name": TRAEFIK_MW_RATELIMIT,
+                    "namespace": TRAEFIK_NAMESPACE,
+                },
+                # {
+                #     "name": TRAEFIK_MW_BASICAUTH,
+                #     "namespace": TRAEFIK_NAMESPACE,
+                # },
+            ],
+            "services": [
+                {
+                    "name": "captura",
+                    "kind": "Service",
+                    "namespace": CAPTURA_NAMESPACE,
+                    "port": CAPTURA_PORT_SERVICE,
+                }
+            ],
+        }
+    ]
+
+    k8s.apiextensions.CustomResource(
+        "registry-ingressroute",
+        api_version=TRAEFIK_API_VERSION,
+        kind="IngressRoute",
+        metadata=metadata,
+        spec={
+            "entryPoints": ["websecure"],
+            "routes": routes,
+            "tls": {"certResolver": "letsencrypt"},
+        },
+        opts=ResourceOptions(depends_on=service),
+    )

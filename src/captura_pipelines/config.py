@@ -56,11 +56,13 @@ class RegistryConfig(BaseYAML):
 
     @computed_field
     @property
-    def registry_api(self) -> str:
-        return f"https://{self.registry}/v2"
+    def registry_api(self) -> str | None:
+        return f"https://{self.registry}/v2" if self.registry is not None else None
 
     def registry_url(self, *segments: str) -> str:
-        return self.registry_api + "/" + "/".join(segments)
+        route = self.registry_api
+        rest = "/" + "/".join(segments)
+        return route if route is not None else rest
 
     def req_catalog(
         self,
