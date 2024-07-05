@@ -64,7 +64,7 @@ CAPTURA_PORT = 8080
 CAPTURA_PORT_SERVICE = 80
 CAPTURA_TEXT_GIT_SYNC_REPO = "captura-text-portfolio-assets.git"
 CAPTURA_TEXT_GIT_SYNC = "captura-git-sync"
-CAPTURA_TEXT_DOCS = "/home/captura/.captura/acederberg.io"
+CAPTURA_TEXT_DOCS = "/home/captura/app/plugins/acederbergio"
 
 
 def create_traefik(config: Config) -> k8s.helm.v3.Chart:
@@ -603,29 +603,29 @@ def create_captura(config: pulumi.Config):
             secret_name="captura",
         ),
     )
-    volume_args_git_sync = k8s.core.v1.VolumeArgs(
-        name=CAPTURA_TEXT_GIT_SYNC, empty_dir=k8s.core.v1.EmptyDirVolumeSourceArgs()
-    )
-    init_container_args = k8s.core.v1.ContainerArgs(
-        name=CAPTURA_TEXT_GIT_SYNC,
-        image="registry.k8s.io/git-sync/git-sync:v4.2.3",
-        volume_mounts=[
-            k8s.core.v1.VolumeMountArgs(
-                name=CAPTURA_TEXT_GIT_SYNC,
-                mount_path="/git",
-            ),
-        ],
-        args=[
-            f"--repo=https://github.com/acederberg/{CAPTURA_TEXT_GIT_SYNC_REPO}",
-            "--depth=1",
-            "--ref=master",
-            "--root=/git",
-            "--one-time",
-        ],
-    )
+    # volume_args_git_sync = k8s.core.v1.VolumeArgs(
+    #     name=CAPTURA_TEXT_GIT_SYNC, empty_dir=k8s.core.v1.EmptyDirVolumeSourceArgs()
+    # )
+    # init_container_args = k8s.core.v1.ContainerArgs(
+    #     name=CAPTURA_TEXT_GIT_SYNC,
+    #     image="registry.k8s.io/git-sync/git-sync:v4.2.3",
+    #     volume_mounts=[
+    #         k8s.core.v1.VolumeMountArgs(
+    #             name=CAPTURA_TEXT_GIT_SYNC,
+    #             mount_path="/git",
+    #         ),
+    #     ],
+    #     args=[
+    #         f"--repo=https://github.com/acederberg/{CAPTURA_TEXT_GIT_SYNC_REPO}",
+    #         "--depth=1",
+    #         "--ref=master",
+    #         "--root=/git",
+    #         "--one-time",
+    #     ],
+    # )
     container_args = k8s.core.v1.ContainerArgs(
         name="captura",
-        image="acederberg/captura-text:1fcd3595ecbd766dd30cc2aa90f680fc4fb1be7e",
+        image="acederberg/acederberg-portfolio:5ec5fa09ea1a67ba7bda79a116a443105bf32d78",
         image_pull_policy="Always",
         ports=[k8s.core.v1.ContainerPortArgs(container_port=8080)],
         env=[
@@ -635,11 +635,11 @@ def create_captura(config: pulumi.Config):
             ),
         ],
         volume_mounts=[
-            k8s.core.v1.VolumeMountArgs(
-                name=CAPTURA_TEXT_GIT_SYNC,
-                mount_path=CAPTURA_TEXT_DOCS,
-                sub_path=CAPTURA_TEXT_GIT_SYNC_REPO,
-            ),
+            # k8s.core.v1.VolumeMountArgs(
+            #     name=CAPTURA_TEXT_GIT_SYNC,
+            #     mount_path=CAPTURA_TEXT_DOCS,
+            #     sub_path=CAPTURA_TEXT_GIT_SYNC_REPO,
+            # ),
             k8s.core.v1.VolumeMountArgs(
                 name="captura",
                 mount_path="/home/captura/.captura/app.yaml",
@@ -678,9 +678,9 @@ def create_captura(config: pulumi.Config):
             template=k8s.core.v1.PodTemplateSpecArgs(
                 metadata=k8s.meta.v1.ObjectMetaArgs(**metadata),
                 spec=k8s.core.v1.PodSpecArgs(
-                    init_containers=[init_container_args],
+                    # init_containers=[init_container_args],
                     containers=[container_args],
-                    volumes=[volume_args, volume_args_git_sync],
+                    volumes=[volume_args],  # , volume_args_git_sync],
                 ),
             ),
         ),
@@ -703,29 +703,74 @@ def create_captura(config: pulumi.Config):
     )
 
     host = f"captura.{domain}"
+    k8s.apiextensions.CustomResource(
+        "traefik-mw-registry-headers",
+        api_version=TRAEFIK_API_VERSION,
+        kind="Middleware",
+        metadata=create_metadata(
+            "traefik-add-prefix-text",
+            TRAEFIK_NAMESPACE,
+            labels=labels,
+        ),
+        # spec=dict(addPrefix=dict(prefix="/text")),
+        spec=dict(
+            redirectRegex=dict(
+                regex="^https://acederberg.io/(.*)",
+                replacement="https://acederberg.io/text/${1}",
+            ),
+        ),
+    )
     routes = [
         {
             "kind": "Rule",
             "match": f"HOST(`{host}`)",
-            "middlewares": [
-                {
-                    "name": TRAEFIK_MW_RATELIMIT,
-                    "namespace": TRAEFIK_NAMESPACE,
-                },
-                # {
-                #     "name": TRAEFIK_MW_BASICAUTH,
-                #     "namespace": TRAEFIK_NAMESPACE,
-                # },
-            ],
             "services": [
-                {
+                svc := {
                     "name": "captura",
                     "kind": "Service",
                     "namespace": CAPTURA_NAMESPACE,
                     "port": CAPTURA_PORT_SERVICE,
-                }
+                },
             ],
-        }
+            "middlewares": (
+                mw := [
+                    {
+                        "name": TRAEFIK_MW_RATELIMIT,
+                        "namespace": TRAEFIK_NAMESPACE,
+                    },
+                    {
+                        "name": TRAEFIK_MW_ERROR_PAGES,
+                        "namespace": TRAEFIK_NAMESPACE,
+                    },
+                ]
+            ),
+        },
+        {
+            "kind": "Rule",
+            "match": f"HOST(`{domain}`) && PathPrefix(`/text`)",
+            "middlewares": mw,
+            "services": [svc],
+        },
+        {
+            "kind": "Rule",
+            "match": f"HOST(`{domain}`) && !PathPrefix(`/text`)",
+            "middlewares": [
+                {
+                    "name": "traefik-add-prefix-text",
+                    "namespace": TRAEFIK_NAMESPACE,
+                },
+                *mw,
+            ],
+            "services": [svc],
+        },
+        {
+            "kind": "Rule",
+            "match": f"HOST(`{domain}`) && PathPrefix(`/colors/`)",
+            "middlewares": [
+                *mw,
+            ],
+            "services": [svc],
+        },
     ]
 
     k8s.apiextensions.CustomResource(
