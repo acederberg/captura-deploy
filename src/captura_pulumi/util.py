@@ -95,6 +95,7 @@ def load(
     overwrite: Dict[str, Any] | None = None,
     exclude: Dict[str, Any] | Set[str] | None = None,
 ):
+
     files = tuple(open(path, "r") for path in paths)
 
     try:
@@ -115,8 +116,7 @@ def load(
     if exclude is None:
         return data
 
-    cond = lambda field: data.get(field) is not None
-    if len(bad := {field for field in exclude if cond(field)}):
+    if len(bad := {field for field in exclude if data.get(field) is not None}):
         msg_fmt = "Helm values must not specify `{}`."
         raise ValueError(msg_fmt.format(bad))
 

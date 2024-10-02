@@ -23,7 +23,7 @@ def create_captura():
         .apply(lambda _: k8s.create_traefik(config))
         .apply(lambda _: k8s.create_error_pages(config))
         .apply(lambda _: k8s.create_traefik_ingressroutes(config))
-        .apply(lambda _: k8s.create_captura(config))
+        # .apply(lambda _: k8s.create_captura(config))
     )
 
     # NOTE: Because stupid object storage sucks or I suck at using it.
