@@ -14,3 +14,4 @@ htpasswd
 *.key
 .builder
 build
+Pulumi.captura-dev.yaml
